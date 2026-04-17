@@ -6,6 +6,10 @@ A browser-based image converter that turns JPG/PNG images into ZX Spectrum SCREE
 
 ## Features
 
+- **Three display modes** covering standard ZX Spectrum + the TS 2068's advanced video modes:
+  - **Standard Spectrum** — 256×192, 8×8 attribute blocks (6912 bytes)
+  - **Timex Extended Color Mode (ECM)** — 256×192, **8×1** attribute blocks; each horizontal strip gets its own ink/paper/bright (12288 bytes). Port 0xFF = 2
+  - **Timex 64-column hi-res** — **512×192 monochrome**, global ink + paper (12288 bytes). Port 0xFF = 6 | (ink << 3)
 - **Interactive cropping** — drag to select any region of the source image, with optional 4:3 aspect lock
 - **10 dithering algorithms**:
   - Floyd-Steinberg
@@ -26,21 +30,32 @@ A browser-based image converter that turns JPG/PNG images into ZX Spectrum SCREE
 - **Attribute grid overlay** to visualize the Spectrum's 8×8 color-clash boundaries
 - **Spectrum palette** reference strip
 - **Exports**:
-  - `.SCR` — raw 6912-byte SCREEN$ binary
-  - `.TAP` — tape file (loads directly in emulators like Fuse, loads to address 16384 as `CODE`)
+  - `.SCR` — raw screen binary (6912 bytes standard, 12288 bytes ECM/hi-res)
+  - `.TAP` — tape file with the correct number of CODE blocks for the selected mode:
+    - Standard: 1 block loaded at 0x4000
+    - ECM: 2 blocks — pixels at 0x4000, attributes at 0x6000
+    - 64-col hi-res: 2 blocks — DF1 at 0x4000, DF2 at 0x6000
   - PNG and JPG at 1×, 2×, or 4× scale, with preserved sharp pixels
 
 ## How it works
 
 The ZX Spectrum has a famously constrained display: 256×192 pixels with only 2 colors (ink + paper) per 8×8 attribute block, drawn from a 15-color palette (8 hues × 2 brightness levels, minus duplicated black). This creates the classic "color clash" effect.
 
-For each 8×8 block, Spectrum Image Maker finds the optimal ink/paper/bright combination by dithering the block with each candidate pair and measuring total perceptual error (weighted RGB distance, with green weighted highest to match human vision). The chosen attributes and dithered pixel pattern are then written to a Spectrum-layout screen buffer using the correct interleaved memory addressing:
+For each attribute block, Spectrum Image Maker finds the optimal ink/paper/bright combination by dithering the block with each candidate pair and measuring total perceptual error (weighted RGB distance, with green weighted highest to match human vision). The chosen attributes and dithered pixel pattern are then written to a Spectrum-layout screen buffer using the correct interleaved memory addressing:
 
 ```
 addr = ((y & 0xC0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2) | (x >> 3)
 ```
 
-The `.TAP` export wraps the screen data in a standard tape file with a CODE header pointing at address 16384, so it can be loaded directly on a real Spectrum or in any emulator.
+### Timex/Sinclair 2068 advanced modes
+
+The TS 2068 adds two additional video modes (set via Port 0xFF) that the app supports:
+
+- **Extended Color Mode (ECM)** enables 8×1 attribute blocks instead of 8×8 — 24× finer vertical color resolution. Pixel data lives at 0x4000 (same interleaved layout as standard Spectrum, 6144 bytes), and attribute data lives at 0x6000 (same interleaved layout, 6144 bytes, one attribute byte per pixel byte — 32×192 = 6144 attribute bytes covering every 8×1 horizontal strip). This mode dramatically reduces color clash and is ideal for photograph conversion.
+
+- **64-column mode** is a 512×192 monochrome mode. Even character columns (0,2,4...62) come from DF1 at 0x4000, odd columns (1,3,5...63) come from DF2 at 0x6000. A single global ink/paper is set via Port 0xFF bits 3-5. BRIGHT and FLASH are fixed at 0, border matches paper. Good for line art, dithered photos, or high-detail monochrome.
+
+The `.TAP` export produces the correct number of CODE blocks for each mode, all loading at their proper addresses. Before loading an ECM or 64-col TAP on real hardware or an emulator, set the video mode first (e.g. `OUT 255, 2` for ECM, or `OUT 255, 6+(ink<<3)` for 64-col).
 
 ## Running locally
 

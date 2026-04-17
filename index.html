@@ -319,6 +319,45 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 <div class="app">
   <aside class="sidebar">
     <div class="control-group">
+      <h3>Display Mode</h3>
+      <select id="displayMode">
+        <option value="standard">Standard Spectrum (256×192, 8×8 attrs)</option>
+        <option value="ecm">Timex Extended Color (256×192, 8×1 attrs)</option>
+        <option value="hires">Timex 64-col hi-res (512×192 mono)</option>
+      </select>
+    </div>
+
+    <div class="control-group" id="hiresColorsGroup" style="display:none;">
+      <h3>64-col Colors</h3>
+      <label>Ink</label>
+      <select id="inkColor">
+        <option value="0">Black</option>
+        <option value="1">Blue</option>
+        <option value="2">Red</option>
+        <option value="3">Magenta</option>
+        <option value="4">Green</option>
+        <option value="5">Cyan</option>
+        <option value="6">Yellow</option>
+        <option value="7" selected>White</option>
+      </select>
+      <label>Paper</label>
+      <select id="paperColor">
+        <option value="0" selected>Black</option>
+        <option value="1">Blue</option>
+        <option value="2">Red</option>
+        <option value="3">Magenta</option>
+        <option value="4">Green</option>
+        <option value="5">Cyan</option>
+        <option value="6">Yellow</option>
+        <option value="7">White</option>
+      </select>
+      <label class="checkbox-row">
+        <input type="checkbox" id="hiresBright">
+        Bright
+      </label>
+    </div>
+
+    <div class="control-group">
       <h3>Dithering</h3>
       <select id="ditherMode">
         <option value="floyd-steinberg">Floyd-Steinberg</option>
@@ -335,7 +374,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
       </select>
     </div>
 
-    <div class="control-group">
+    <div class="control-group" id="colorStrategyGroup">
       <h3>Color Strategy</h3>
       <select id="colorStrategy">
         <option value="per-block">Per-block best-fit</option>
@@ -561,13 +600,24 @@ function blendFactor(r, g, b, c0, c1, mode) {
   return total > 0 ? d0 / total : 0.5;
 }
 
+// --- Display modes ---
+// blockW/blockH = attribute block size; colorful = uses per-block color search
+// port = Port 0xFF value to set the mode on real hardware
+const MODES = {
+  standard: { w: 256, h: 192, blockW: 8, blockH: 8, colorful: true,  port: 0, label: 'standard' },
+  ecm:      { w: 256, h: 192, blockW: 8, blockH: 1, colorful: true,  port: 2, label: 'ecm' },
+  hires:    { w: 512, h: 192, blockW: 0, blockH: 0, colorful: false, port: 6, label: 'hires' },
+};
+
 // --- State ---
 let sourceImage = null;       // HTMLImageElement
-let convertedPixels = null;   // Float64Array [r,g,b,...] of converted image (native res)
-let convertedAttrs = null;    // attribute bytes
+let convertedPixels = null;   // Uint8Array of converted image (native res, RGB)
+let convertedAttrs = null;    // attribute bytes (varies by mode)
 let screenWidth = 256;
 let screenHeight = 192;
-let scrBytes = null;          // Uint8Array of SCREEN$ data
+let currentMode = 'standard';
+let scrBytes = null;          // Uint8Array of screen data
+let tapBlocks = null;         // array of {data, addr, name} for TAP generation
 let cropRect = null;          // {x, y, w, h} in source image coords
 let cropAspectLocked = true;
 let cropDisplayScale = 1;     // source px -> display px
@@ -783,14 +833,22 @@ $('lockAspect').addEventListener('change', e => {
 });
 
 // --- Settings change triggers reconvert ---
-for (const id of ['ditherMode', 'colorStrategy', 'brightness', 'contrast', 'saturation', 'showGrid']) {
+for (const id of ['displayMode', 'ditherMode', 'colorStrategy', 'inkColor', 'paperColor', 'hiresBright', 'brightness', 'contrast', 'saturation', 'showGrid']) {
   $(id).addEventListener('input', () => {
     if (id === 'brightness') $('brightnessVal').textContent = $(id).value;
     if (id === 'contrast') $('contrastVal').textContent = $(id).value;
     if (id === 'saturation') $('saturationVal').textContent = $(id).value;
+    if (id === 'displayMode') updateModeUI();
     if (sourceImage) convert();
   });
 }
+
+function updateModeUI() {
+  const mode = $('displayMode').value;
+  $('hiresColorsGroup').style.display = mode === 'hires' ? '' : 'none';
+  $('colorStrategyGroup').style.display = mode === 'hires' ? 'none' : '';
+}
+updateModeUI();
 
 // --- Error diffusion kernels ---
 // Each entry: [dx, dy, weight]
@@ -828,8 +886,10 @@ function isErrorDiffusion(mode) {
 
 // --- Main conversion pipeline ---
 function convert() {
-  screenWidth = 256;
-  screenHeight = 192;
+  currentMode = $('displayMode').value;
+  const modeCfg = MODES[currentMode];
+  screenWidth = modeCfg.w;
+  screenHeight = modeCfg.h;
   const ditherMode = $('ditherMode').value;
   const colorStrategy = $('colorStrategy').value;
   const brightnessAdj = parseInt($('brightness').value);
@@ -908,115 +968,140 @@ function convert() {
 
     // Result arrays
     const resultPixels = new Uint8Array(screenWidth * screenHeight * 3);
-    const attrRows = 24;
-    const numAttrCols = 32;
-    const attrs = new Uint8Array(numAttrCols * attrRows);
+    let attrs = null;
 
-    // Step C+D: Process each 8x8 attribute block
-    for (let by = 0; by < attrRows; by++) {
-      for (let bx = 0; bx < numAttrCols; bx++) {
-        const blockX = bx * 8;
-        const blockY = by * 8;
+    if (modeCfg.colorful) {
+      // Standard or ECM mode: per-block color search
+      const bW = modeCfg.blockW;
+      const bH = modeCfg.blockH;
+      const numAttrCols = screenWidth / bW;
+      const numAttrRows = screenHeight / bH;
+      attrs = new Uint8Array(numAttrCols * numAttrRows);
 
-        // Find best ink/paper/bright for this block
-        let bestInk, bestPaper, bestBright, bestError = Infinity;
+      for (let by = 0; by < numAttrRows; by++) {
+        for (let bx = 0; bx < numAttrCols; bx++) {
+          const blockX = bx * bW;
+          const blockY = by * bH;
 
-        if (colorStrategy === 'per-block') {
-          // Strategy 1: Try all combinations
-          for (let bright = 0; bright <= 1; bright++) {
-            const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
-            for (let ink = 0; ink < 8; ink++) {
-              for (let paper = ink; paper < 8; paper++) {
-                const err = evaluateBlock(work, blockX, blockY, 8, 8,
-                                          pal[ink], pal[paper], ditherMode);
-                if (err < bestError) {
-                  bestError = err;
-                  bestInk = ink;
-                  bestPaper = paper;
-                  bestBright = bright;
-                }
-              }
-            }
-          }
-        } else {
-          // Strategy 2: Global pre-quantize then pick best 2
-          bestBright = 0; bestInk = 0; bestPaper = 7;
-          const colorCounts = new Map();
+          let bestInk, bestPaper, bestBright, bestError = Infinity;
 
-          for (let py = 0; py < 8; py++) {
-            for (let px = 0; px < 8; px++) {
-              const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
-              const r = Math.max(0, Math.min(255, work[idx]));
-              const g = Math.max(0, Math.min(255, work[idx+1]));
-              const b = Math.max(0, Math.min(255, work[idx+2]));
-              const nearest = nearestSpectrumColor(r, g, b);
-              const key = nearest.bright * 8 + nearest.index;
-              colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
-            }
-          }
-
-          // Sort by frequency
-          const sorted = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]);
-
-          if (sorted.length >= 2) {
-            // Try to find best pair from top candidates
-            const candidates = sorted.slice(0, Math.min(6, sorted.length));
-            bestError = Infinity;
-
-            for (let i = 0; i < candidates.length; i++) {
-              for (let j = i; j < candidates.length; j++) {
-                const c1key = candidates[i][0];
-                const c2key = candidates[j][0];
-                const c1bright = c1key >> 3, c1idx = c1key & 7;
-                const c2bright = c2key >> 3, c2idx = c2key & 7;
-
-                // Both colors must share same brightness (unless one is black)
-                for (let tryBright = 0; tryBright <= 1; tryBright++) {
-                  const pal = tryBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
-                  const err = evaluateBlock(work, blockX, blockY, 8, 8,
-                                            pal[c1idx], pal[c2idx], ditherMode);
+          if (colorStrategy === 'per-block') {
+            for (let bright = 0; bright <= 1; bright++) {
+              const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
+              for (let ink = 0; ink < 8; ink++) {
+                for (let paper = ink; paper < 8; paper++) {
+                  const err = evaluateBlock(work, blockX, blockY, bW, bH,
+                                            pal[ink], pal[paper], ditherMode);
                   if (err < bestError) {
                     bestError = err;
-                    bestInk = c1idx;
-                    bestPaper = c2idx;
-                    bestBright = tryBright;
+                    bestInk = ink;
+                    bestPaper = paper;
+                    bestBright = bright;
                   }
                 }
               }
             }
-          } else if (sorted.length === 1) {
-            const key = sorted[0][0];
-            bestBright = key >> 3;
-            bestInk = key & 7;
-            bestPaper = bestInk;
+          } else {
+            // Global pre-quantize
+            bestBright = 0; bestInk = 0; bestPaper = 7;
+            const colorCounts = new Map();
+
+            for (let py = 0; py < bH; py++) {
+              for (let px = 0; px < bW; px++) {
+                const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
+                const r = Math.max(0, Math.min(255, work[idx]));
+                const g = Math.max(0, Math.min(255, work[idx+1]));
+                const b = Math.max(0, Math.min(255, work[idx+2]));
+                const nearest = nearestSpectrumColor(r, g, b);
+                const key = nearest.bright * 8 + nearest.index;
+                colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
+              }
+            }
+
+            const sorted = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]);
+
+            if (sorted.length >= 2) {
+              const candidates = sorted.slice(0, Math.min(6, sorted.length));
+              bestError = Infinity;
+
+              for (let i = 0; i < candidates.length; i++) {
+                for (let j = i; j < candidates.length; j++) {
+                  const c1key = candidates[i][0];
+                  const c2key = candidates[j][0];
+                  const c1idx = c1key & 7;
+                  const c2idx = c2key & 7;
+
+                  for (let tryBright = 0; tryBright <= 1; tryBright++) {
+                    const pal = tryBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
+                    const err = evaluateBlock(work, blockX, blockY, bW, bH,
+                                              pal[c1idx], pal[c2idx], ditherMode);
+                    if (err < bestError) {
+                      bestError = err;
+                      bestInk = c1idx;
+                      bestPaper = c2idx;
+                      bestBright = tryBright;
+                    }
+                  }
+                }
+              }
+            } else if (sorted.length === 1) {
+              const key = sorted[0][0];
+              bestBright = key >> 3;
+              bestInk = key & 7;
+              bestPaper = bestInk;
+            }
           }
+
+          const pal = bestBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
+          applyBlockDither(work, resultPixels, blockX, blockY, bW, bH,
+                           pal[bestInk], pal[bestPaper], ditherMode);
+          attrs[by * numAttrCols + bx] = (bestBright << 6) | (bestPaper << 3) | bestInk;
         }
-
-        // Now apply the chosen colors with dithering to produce final block pixels
-        const pal = bestBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
-        const inkColor = pal[bestInk];
-        const paperColor = pal[bestPaper];
-
-        applyBlockDither(work, resultPixels, blockX, blockY, 8, 8,
-                         inkColor, paperColor, ditherMode);
-
-        // Store attribute
-        attrs[by * numAttrCols + bx] = (bestBright << 6) | (bestPaper << 3) | bestInk;
       }
+    } else {
+      // 64-column monochrome mode: single ink/paper pair, dither whole image
+      const inkIdx = parseInt($('inkColor').value);
+      const paperIdx = parseInt($('paperColor').value);
+      const bright = $('hiresBright').checked ? 1 : 0;
+      const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
+      applyBlockDither(work, resultPixels, 0, 0, screenWidth, screenHeight,
+                       pal[inkIdx], pal[paperIdx], ditherMode);
+      attrs = new Uint8Array([(bright << 6) | (paperIdx << 3) | inkIdx]);
     }
 
     convertedPixels = resultPixels;
     convertedAttrs = attrs;
 
-    // Generate SCREEN$ binary
-    scrBytes = generateStandardScreen(resultPixels, attrs);
+    // Generate binary + TAP blocks for current mode
+    if (currentMode === 'standard') {
+      scrBytes = generateStandardScreen(resultPixels, attrs);
+      tapBlocks = [{ data: scrBytes, addr: 0x4000, name: 'screen' }];
+    } else if (currentMode === 'ecm') {
+      const { pixels: pixBytes, attribs: attrBytes } = generateECMScreen(resultPixels, attrs);
+      scrBytes = new Uint8Array(pixBytes.length + attrBytes.length);
+      scrBytes.set(pixBytes, 0);
+      scrBytes.set(attrBytes, pixBytes.length);
+      tapBlocks = [
+        { data: pixBytes,  addr: 0x4000, name: 'ecm-pix' },
+        { data: attrBytes, addr: 0x6000, name: 'ecm-atr' },
+      ];
+    } else {
+      const { df1, df2 } = generate64ColScreen(resultPixels, attrs);
+      scrBytes = new Uint8Array(df1.length + df2.length);
+      scrBytes.set(df1, 0);
+      scrBytes.set(df2, df1.length);
+      tapBlocks = [
+        { data: df1, addr: 0x4000, name: 'hi-df1' },
+        { data: df2, addr: 0x6000, name: 'hi-df2' },
+      ];
+    }
 
     // Render converted preview
     renderConvertedPreview(resultPixels);
 
     const elapsed = (performance.now() - t0).toFixed(0);
-    statusText.textContent = `Converted in ${elapsed}ms`;
-    statusSize.textContent = `SCREEN$: ${scrBytes.length} bytes`;
+    statusText.textContent = `Converted in ${elapsed}ms (${currentMode})`;
+    statusSize.textContent = `${scrBytes.length} bytes`;
 
     // Enable export buttons
     for (const id of ['exportScr','exportTap','exportPng1x','exportPng2x','exportPng4x','exportJpg1x','exportJpg2x','exportJpg4x']) {
@@ -1205,53 +1290,131 @@ function generateStandardScreen(pixels, attrs) {
   return scr;
 }
 
-// --- TAP file generation ---
-function generateTap(screenData, filename) {
-  // Pad or truncate filename to 10 chars
-  let name = (filename || 'screen').padEnd(10, ' ').substring(0, 10);
+// --- Generate Timex Extended Color Mode (8x1 attribute blocks) ---
+// Pixels at 0x4000 (6144 bytes, standard interleaved layout)
+// Attributes at 0x6000 (6144 bytes, SAME interleaved layout, 1:1 with pixel bytes)
+// Each attribute byte corresponds to one 8x1 strip (one byte of pixel data)
+function generateECMScreen(pixels, attrs) {
+  const pixBuf = new Uint8Array(6144);
+  const attrBuf = new Uint8Array(6144);
+
+  for (let y = 0; y < 192; y++) {
+    const addr = ((y & 0xC0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2);
+    for (let col = 0; col < 32; col++) {
+      // Each (col, y) is a unique 8x1 attribute block.
+      // In attrs[], the layout is rows of 32 cols, one row per scanline (32*192 = 6144).
+      const attr = attrs[y * 32 + col];
+      const ink = attr & 0x07;
+      const paper = (attr >> 3) & 0x07;
+      const bright = (attr >> 6) & 0x01;
+      const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
+
+      let byte = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        const x = col * 8 + bit;
+        const pIdx = (y * 256 + x) * 3;
+        const pixel = [pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2]];
+        const inkDist = colorDist(pixel, pal[ink]);
+        const paperDist = colorDist(pixel, pal[paper]);
+        if (inkDist <= paperDist) byte |= (0x80 >> bit);
+      }
+      pixBuf[addr + col] = byte;
+      attrBuf[addr + col] = attr;
+    }
+  }
+
+  return { pixels: pixBuf, attribs: attrBuf };
+}
+
+// --- Generate Timex 64-Column Hi-Res Mono Screen (512x192 monochrome) ---
+// Even character columns from DF1 at 0x4000, odd from DF2 at 0x6000.
+// Each DF uses standard Spectrum interleaved row addressing.
+// Colors are global: set via Port FFH bits 3-5 (ink); paper is fixed complement.
+function generate64ColScreen(pixels, attrs) {
+  const df1 = new Uint8Array(6144);  // even char columns (0, 2, 4, ..., 62)
+  const df2 = new Uint8Array(6144);  // odd char columns (1, 3, 5, ..., 63)
+
+  // Single global attribute
+  const attr = attrs[0];
+  const ink = attr & 0x07;
+  const paper = (attr >> 3) & 0x07;
+  const bright = (attr >> 6) & 0x01;
+  const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
+  const inkRGB = pal[ink], paperRGB = pal[paper];
+
+  for (let y = 0; y < 192; y++) {
+    const rowAddr = ((y & 0xC0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2);
+    for (let charCol = 0; charCol < 64; charCol++) {
+      let byte = 0;
+      for (let bit = 0; bit < 8; bit++) {
+        const x = charCol * 8 + bit;
+        const pIdx = (y * 512 + x) * 3;
+        const pixel = [pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2]];
+        if (colorDist(pixel, inkRGB) <= colorDist(pixel, paperRGB)) {
+          byte |= (0x80 >> bit);
+        }
+      }
+      // Bank selection: even char cols -> DF1, odd -> DF2
+      const bankCol = charCol >> 1;
+      if ((charCol & 1) === 0) df1[rowAddr + bankCol] = byte;
+      else                     df2[rowAddr + bankCol] = byte;
+    }
+  }
+
+  return { df1, df2 };
+}
+
+// --- TAP file generation (supports multiple CODE blocks) ---
+function makeTapPair(data, addr, name) {
+  // Filename padded to 10 chars
+  const fname = (name || 'screen').padEnd(10, ' ').substring(0, 10);
   const nameBytes = new Uint8Array(10);
-  for (let i = 0; i < 10; i++) nameBytes[i] = name.charCodeAt(i);
+  for (let i = 0; i < 10; i++) nameBytes[i] = fname.charCodeAt(i);
 
-  const dataLen = screenData.length;
-
-  // Header block: type=3 (CODE), length, param1=16384, param2=32768
+  // Header data block: type=3 (CODE), filename, length, param1=start addr, param2=32768
   const headerData = new Uint8Array(17);
-  headerData[0] = 3; // CODE type
+  headerData[0] = 3;
   headerData.set(nameBytes, 1);
-  headerData[11] = dataLen & 0xFF;
-  headerData[12] = (dataLen >> 8) & 0xFF;
-  headerData[13] = 0x00; // param1 low (16384 & 0xFF = 0)
-  headerData[14] = 0x40; // param1 high (16384 >> 8 = 64 = 0x40)
-  headerData[15] = 0x00; // param2 low (32768)
-  headerData[16] = 0x80; // param2 high
+  headerData[11] = data.length & 0xFF;
+  headerData[12] = (data.length >> 8) & 0xFF;
+  headerData[13] = addr & 0xFF;
+  headerData[14] = (addr >> 8) & 0xFF;
+  headerData[15] = 0x00;
+  headerData[16] = 0x80;
 
-  // Build header TAP block
-  const headerBlock = new Uint8Array(headerData.length + 2); // flag + data + checksum
-  headerBlock[0] = 0x00; // flag: header
+  const headerBlock = new Uint8Array(headerData.length + 2);
+  headerBlock[0] = 0x00;
   headerBlock.set(headerData, 1);
-  let chk = 0x00; // start with flag
+  let chk = 0x00;
   for (let i = 0; i < headerData.length; i++) chk ^= headerData[i];
   headerBlock[headerBlock.length - 1] = chk;
 
-  // Build data TAP block
-  const dataBlock = new Uint8Array(screenData.length + 2); // flag + data + checksum
-  dataBlock[0] = 0xFF; // flag: data
-  dataBlock.set(screenData, 1);
-  chk = 0xFF; // start with flag
-  for (let i = 0; i < screenData.length; i++) chk ^= screenData[i];
+  const dataBlock = new Uint8Array(data.length + 2);
+  dataBlock[0] = 0xFF;
+  dataBlock.set(data, 1);
+  chk = 0xFF;
+  for (let i = 0; i < data.length; i++) chk ^= data[i];
   dataBlock[dataBlock.length - 1] = chk;
 
-  // Wrap in TAP format (each block preceded by 2-byte LE length)
-  const tap = new Uint8Array(2 + headerBlock.length + 2 + dataBlock.length);
-  let offset = 0;
-  tap[offset++] = headerBlock.length & 0xFF;
-  tap[offset++] = (headerBlock.length >> 8) & 0xFF;
-  tap.set(headerBlock, offset);
-  offset += headerBlock.length;
-  tap[offset++] = dataBlock.length & 0xFF;
-  tap[offset++] = (dataBlock.length >> 8) & 0xFF;
-  tap.set(dataBlock, offset);
+  return { headerBlock, dataBlock };
+}
 
+function generateTap(blocks) {
+  // Each entry: {data, addr, name}
+  const pairs = blocks.map(b => makeTapPair(b.data, b.addr, b.name));
+  let totalLen = 0;
+  for (const p of pairs) totalLen += 4 + p.headerBlock.length + p.dataBlock.length;
+
+  const tap = new Uint8Array(totalLen);
+  let o = 0;
+  for (const p of pairs) {
+    tap[o++] = p.headerBlock.length & 0xFF;
+    tap[o++] = (p.headerBlock.length >> 8) & 0xFF;
+    tap.set(p.headerBlock, o); o += p.headerBlock.length;
+    tap[o++] = p.dataBlock.length & 0xFF;
+    tap[o++] = (p.dataBlock.length >> 8) & 0xFF;
+    tap.set(p.dataBlock, o); o += p.dataBlock.length;
+  }
   return tap;
 }
 
@@ -1280,8 +1443,13 @@ function renderConvertedPreview(pixels) {
 
   // Draw attribute grid overlay if enabled
   if ($('showGrid').checked) {
-    const blockW = 8 * scale;
-    const blockH = 8 * scale;
+    const modeCfg = MODES[currentMode] || MODES.standard;
+    // For ECM, attribute blocks are 8x1; drawing 192 horizontal lines would be
+    // visually overwhelming so we draw the 8x8 character grid instead.
+    const gridW = (modeCfg.colorful ? modeCfg.blockW : 8) * scale;
+    const gridH = 8 * scale;
+    const blockW = gridW;
+    const blockH = gridH;
     ctx.strokeStyle = 'rgba(255, 255, 0, 0.3)';
     ctx.lineWidth = 1;
     for (let x = 0; x <= screenWidth * scale; x += blockW) {
@@ -1349,15 +1517,17 @@ function exportImage(format, scale) {
 // --- Export event handlers ---
 $('exportScr').addEventListener('click', () => {
   if (!scrBytes) return;
+  const label = MODES[currentMode].label;
   downloadBlob(new Blob([scrBytes], { type: 'application/octet-stream' }),
-               `screen_${screenWidth}x${screenHeight}.scr`);
+               `image_${label}.scr`);
 });
 
 $('exportTap').addEventListener('click', () => {
-  if (!scrBytes) return;
-  const tap = generateTap(scrBytes, 'Loading');
+  if (!tapBlocks) return;
+  const tap = generateTap(tapBlocks);
+  const label = MODES[currentMode].label;
   downloadBlob(new Blob([tap], { type: 'application/octet-stream' }),
-               `screen_${screenWidth}x${screenHeight}.tap`);
+               `image_${label}.tap`);
 });
 
 $('exportPng1x').addEventListener('click', () => exportImage('png', 1));
