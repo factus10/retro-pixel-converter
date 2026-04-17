@@ -527,6 +527,105 @@ const ALL_COLORS = [];
 for (let i = 0; i < 8; i++) ALL_COLORS.push({ rgb: PALETTE_NORMAL[i], bright: 0, index: i });
 for (let i = 0; i < 8; i++) ALL_COLORS.push({ rgb: PALETTE_BRIGHT[i], bright: 1, index: i });
 
+// --- Commodore 64 palette (Pepto / Colodore, 16 colors) ---
+// Reference: pepto.de/projects/colorvic, colodore.com
+const PALETTE_C64 = [
+  [  0,   0,   0], // 0 black
+  [255, 255, 255], // 1 white
+  [129,  51,  56], // 2 red
+  [117, 206, 200], // 3 cyan
+  [142,  60, 151], // 4 purple
+  [ 86, 172,  77], // 5 green
+  [ 46,  44, 155], // 6 blue
+  [237, 241, 113], // 7 yellow
+  [142,  80,  41], // 8 orange
+  [ 85,  56,   0], // 9 brown
+  [196, 108, 113], // 10 light red
+  [ 74,  74,  74], // 11 dark grey
+  [123, 123, 123], // 12 medium grey
+  [169, 255, 159], // 13 light green
+  [112, 109, 235], // 14 light blue
+  [178, 178, 178], // 15 light grey
+];
+
+// --- QL palette (same hues as ZX Spectrum BRIGHT, single brightness level) ---
+const PALETTE_QL = [
+  [  0,   0,   0], // 0 black
+  [  0,   0, 255], // 1 blue
+  [255,   0,   0], // 2 red
+  [255,   0, 255], // 3 magenta
+  [  0, 255,   0], // 4 green
+  [  0, 255, 255], // 5 cyan
+  [255, 255,   0], // 6 yellow
+  [255, 255, 255], // 7 white
+];
+
+// --- QL Mode 4 fixed 4-color subset (hardwired in ZX8301) ---
+const PALETTE_QL_MODE4 = [
+  [  0,   0,   0], // 0 black  (GR bits 00)
+  [255,   0,   0], // 1 red    (GR bits 01)
+  [  0, 255,   0], // 2 green  (GR bits 10)
+  [255, 255, 255], // 3 white  (GR bits 11)
+];
+
+// --- Atari 800 palette (128 colors: 16 hues × 8 lumas) ---
+// Computed using YIQ-style hue/luma model similar to Altirra NTSC.
+// Not bit-exact to any specific emulator but visually representative.
+const PALETTE_ATARI = (() => {
+  const colors = [];
+  for (let h = 0; h < 16; h++) {
+    for (let l = 0; l < 8; l++) {
+      const luma = (l + 0.5) / 8;
+      let r, g, b;
+      if (h === 0) {
+        // Grayscale column
+        r = g = b = luma;
+      } else {
+        // Hue angle around NTSC color wheel: hue 1 ≈ gold, cycling around
+        const angle = ((h - 1) * 360 / 15 + 195) * Math.PI / 180;
+        const sat = 0.42;
+        const I = sat * Math.cos(angle);
+        const Q = sat * Math.sin(angle);
+        r = luma + 0.956 * I + 0.621 * Q;
+        g = luma - 0.272 * I - 0.647 * Q;
+        b = luma - 1.106 * I + 1.703 * Q;
+      }
+      colors.push([
+        Math.max(0, Math.min(255, Math.round(r * 255))),
+        Math.max(0, Math.min(255, Math.round(g * 255))),
+        Math.max(0, Math.min(255, Math.round(b * 255))),
+      ]);
+    }
+  }
+  return colors;
+})();
+
+// Luminance-only palette (16 steps) for a given Atari hue. Used by GR.9.
+function atariLumaPalette(hue) {
+  const pal = [];
+  for (let l = 0; l < 16; l++) {
+    const luma = (l + 0.5) / 16;
+    let r, g, b;
+    if (hue === 0) {
+      r = g = b = luma;
+    } else {
+      const angle = ((hue - 1) * 360 / 15 + 195) * Math.PI / 180;
+      const sat = 0.42;
+      const I = sat * Math.cos(angle);
+      const Q = sat * Math.sin(angle);
+      r = luma + 0.956 * I + 0.621 * Q;
+      g = luma - 0.272 * I - 0.647 * Q;
+      b = luma - 1.106 * I + 1.703 * Q;
+    }
+    pal.push([
+      Math.max(0, Math.min(255, Math.round(r * 255))),
+      Math.max(0, Math.min(255, Math.round(g * 255))),
+      Math.max(0, Math.min(255, Math.round(b * 255))),
+    ]);
+  }
+  return pal;
+}
+
 // --- Perceptual Color Distance (weighted Euclidean) ---
 // Weights loosely follow BT.601 luma contributions (R≈0.30, G≈0.59, B≈0.11):
 // green is weighted highest, then red, then blue (human vision is least
@@ -1037,7 +1136,7 @@ function convert() {
               for (let ink = 0; ink < 8; ink++) {
                 for (let paper = ink; paper < 8; paper++) {
                   const err = evaluateBlock(work, blockX, blockY, bW, bH,
-                                            pal[ink], pal[paper], ditherMode);
+                                            [pal[ink], pal[paper]], ditherMode);
                   if (err < bestError) {
                     bestError = err;
                     bestInk = ink;
@@ -1080,7 +1179,7 @@ function convert() {
                   for (let tryBright = 0; tryBright <= 1; tryBright++) {
                     const pal = tryBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
                     const err = evaluateBlock(work, blockX, blockY, bW, bH,
-                                              pal[c1idx], pal[c2idx], ditherMode);
+                                              [pal[c1idx], pal[c2idx]], ditherMode);
                     if (err < bestError) {
                       bestError = err;
                       bestInk = c1idx;
@@ -1099,7 +1198,7 @@ function convert() {
           }
 
           const pal = bestBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
-          blockColors[by][bx] = { ink: pal[bestInk], paper: pal[bestPaper] };
+          blockColors[by][bx] = [pal[bestInk], pal[bestPaper]];
           attrs[by * numAttrCols + bx] = (bestBright << 6) | (bestPaper << 3) | bestInk;
         }
       }
@@ -1111,7 +1210,7 @@ function convert() {
       const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
       bW = screenWidth; bH = screenHeight;
       numAttrCols = 1; numAttrRows = 1;
-      blockColors = [[{ ink: pal[inkIdx], paper: pal[paperIdx] }]];
+      blockColors = [[[pal[inkIdx], pal[paperIdx]]]];
       attrs = new Uint8Array([(bright << 6) | (paperIdx << 3) | inkIdx]);
     }
 
@@ -1165,66 +1264,91 @@ function convert() {
   }, 10);
 }
 
-// --- Evaluate a block with a given color pair (returns total error, no side effects) ---
-function evaluateBlock(work, bx, by, bw, bh, color0, color1, ditherMode) {
+// --- Find nearest palette color to given RGB ---
+function quantizeNearest(r, g, b, colors) {
+  let bestIdx = 0, bestDist = Infinity;
+  for (let i = 0; i < colors.length; i++) {
+    const d = colorDist([r, g, b], colors[i]);
+    if (d < bestDist) { bestDist = d; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+// --- Evaluate a block with a given set of N colors (returns total error) ---
+// Supports any number of colors >= 2. For N=2, threshold dithers use the
+// blendFactor-based approach (smoother). For N>2 they fall back to
+// nearest-with-threshold-bias.
+function evaluateBlock(work, bx, by, bw, bh, colors, ditherMode) {
   let totalError = 0;
 
   if (isThresholdDither(ditherMode)) {
-    for (let py = 0; py < bh; py++) {
-      for (let px = 0; px < bw; px++) {
-        const idx = ((by + py) * screenWidth + (bx + px)) * 3;
-        const r = Math.max(0, Math.min(255, work[idx]));
-        const g = Math.max(0, Math.min(255, work[idx+1]));
-        const b = Math.max(0, Math.min(255, work[idx+2]));
-
-        const factor = blendFactor(r, g, b, color0, color1, ditherMode);
-        const threshold = getThreshold(ditherMode, bx + px, by + py);
-        const chosen = factor > threshold ? color1 : color0;
-        totalError += colorDist([r, g, b], chosen);
+    if (colors.length === 2) {
+      const c0 = colors[0], c1 = colors[1];
+      for (let py = 0; py < bh; py++) {
+        for (let px = 0; px < bw; px++) {
+          const idx = ((by + py) * screenWidth + (bx + px)) * 3;
+          const r = Math.max(0, Math.min(255, work[idx]));
+          const g = Math.max(0, Math.min(255, work[idx+1]));
+          const b = Math.max(0, Math.min(255, work[idx+2]));
+          const factor = blendFactor(r, g, b, c0, c1, ditherMode);
+          const threshold = getThreshold(ditherMode, bx + px, by + py);
+          const chosen = factor > threshold ? c1 : c0;
+          totalError += colorDist([r, g, b], chosen);
+        }
+      }
+    } else {
+      // N > 2: bias pixel by threshold, then pick nearest
+      for (let py = 0; py < bh; py++) {
+        for (let px = 0; px < bw; px++) {
+          const idx = ((by + py) * screenWidth + (bx + px)) * 3;
+          const r = Math.max(0, Math.min(255, work[idx]));
+          const g = Math.max(0, Math.min(255, work[idx+1]));
+          const b = Math.max(0, Math.min(255, work[idx+2]));
+          const bias = (getThreshold(ditherMode, bx + px, by + py) - 0.5) * 40;
+          const ci = quantizeNearest(r + bias, g + bias, b + bias, colors);
+          totalError += colorDist([r, g, b], colors[ci]);
+        }
       }
     }
-  } else {
-    // Error diffusion or none: evaluate with temporary copy
-    const tempW = bw;
-    const tempH = bh;
-    const temp = new Float64Array(tempW * tempH * 3);
-    for (let py = 0; py < bh; py++) {
-      for (let px = 0; px < bw; px++) {
-        const srcIdx = ((by + py) * screenWidth + (bx + px)) * 3;
-        const tIdx = (py * tempW + px) * 3;
-        temp[tIdx]     = work[srcIdx];
-        temp[tIdx + 1] = work[srcIdx + 1];
-        temp[tIdx + 2] = work[srcIdx + 2];
-      }
+    return totalError;
+  }
+
+  // Error diffusion or none: evaluate with temporary copy
+  const tempW = bw, tempH = bh;
+  const temp = new Float64Array(tempW * tempH * 3);
+  for (let py = 0; py < bh; py++) {
+    for (let px = 0; px < bw; px++) {
+      const srcIdx = ((by + py) * screenWidth + (bx + px)) * 3;
+      const tIdx = (py * tempW + px) * 3;
+      temp[tIdx]     = work[srcIdx];
+      temp[tIdx + 1] = work[srcIdx + 1];
+      temp[tIdx + 2] = work[srcIdx + 2];
     }
+  }
 
-    const kernel = DIFFUSION_KERNELS[ditherMode];
+  const kernel = DIFFUSION_KERNELS[ditherMode];
 
-    for (let py = 0; py < bh; py++) {
-      for (let px = 0; px < bw; px++) {
-        const tIdx = (py * tempW + px) * 3;
-        const r = Math.max(0, Math.min(255, temp[tIdx]));
-        const g = Math.max(0, Math.min(255, temp[tIdx+1]));
-        const b = Math.max(0, Math.min(255, temp[tIdx+2]));
-        const pixel = [r, g, b];
+  for (let py = 0; py < bh; py++) {
+    for (let px = 0; px < bw; px++) {
+      const tIdx = (py * tempW + px) * 3;
+      const r = Math.max(0, Math.min(255, temp[tIdx]));
+      const g = Math.max(0, Math.min(255, temp[tIdx+1]));
+      const b = Math.max(0, Math.min(255, temp[tIdx+2]));
+      const ci = quantizeNearest(r, g, b, colors);
+      const chosen = colors[ci];
+      totalError += colorDist([r, g, b], chosen);
 
-        const d0 = colorDist(pixel, color0);
-        const d1 = colorDist(pixel, color1);
-        const chosen = d0 <= d1 ? color0 : color1;
-        totalError += Math.min(d0, d1);
-
-        if (kernel) {
-          const er = r - chosen[0];
-          const eg = g - chosen[1];
-          const eb = b - chosen[2];
-          for (const [dx, dy, weight] of kernel) {
-            const nx = px + dx, ny = py + dy;
-            if (nx >= 0 && nx < tempW && ny >= 0 && ny < tempH) {
-              const nIdx = (ny * tempW + nx) * 3;
-              temp[nIdx]     += er * weight;
-              temp[nIdx + 1] += eg * weight;
-              temp[nIdx + 2] += eb * weight;
-            }
+      if (kernel) {
+        const er = r - chosen[0];
+        const eg = g - chosen[1];
+        const eb = b - chosen[2];
+        for (const [dx, dy, weight] of kernel) {
+          const nx = px + dx, ny = py + dy;
+          if (nx >= 0 && nx < tempW && ny >= 0 && ny < tempH) {
+            const nIdx = (ny * tempW + nx) * 3;
+            temp[nIdx]     += er * weight;
+            temp[nIdx + 1] += eg * weight;
+            temp[nIdx + 2] += eb * weight;
           }
         }
       }
@@ -1239,8 +1363,9 @@ function evaluateBlock(work, bx, by, bw, bh, color0, color1, ditherMode) {
 // blocks are only 8×1 pixels). Threshold dithers (ordered / blue noise / etc)
 // give the same result per-block or globally since they use global coordinates.
 //
-// getColorsAt(x, y) returns { ink: [r,g,b], paper: [r,g,b] } for the block
-// containing pixel (x, y).
+// getColorsAt(x, y) returns an array of RGB triples [[r,g,b], ...] — the
+// palette available to the block containing pixel (x, y). Array length must
+// be >= 1.
 function applyGlobalDither(work, result, ditherMode, getColorsAt) {
   const W = screenWidth, H = screenHeight;
 
@@ -1251,10 +1376,18 @@ function applyGlobalDither(work, result, ditherMode, getColorsAt) {
         const r = Math.max(0, Math.min(255, work[idx]));
         const g = Math.max(0, Math.min(255, work[idx+1]));
         const b = Math.max(0, Math.min(255, work[idx+2]));
-        const { ink, paper } = getColorsAt(x, y);
-        const factor = blendFactor(r, g, b, ink, paper, ditherMode);
-        const threshold = getThreshold(ditherMode, x, y);
-        const chosen = factor > threshold ? paper : ink;
+        const colors = getColorsAt(x, y);
+
+        let chosen;
+        if (colors.length === 2) {
+          const factor = blendFactor(r, g, b, colors[0], colors[1], ditherMode);
+          const threshold = getThreshold(ditherMode, x, y);
+          chosen = factor > threshold ? colors[1] : colors[0];
+        } else {
+          const bias = (getThreshold(ditherMode, x, y) - 0.5) * 40;
+          const ci = quantizeNearest(r + bias, g + bias, b + bias, colors);
+          chosen = colors[ci];
+        }
         result[idx]     = chosen[0];
         result[idx + 1] = chosen[1];
         result[idx + 2] = chosen[2];
@@ -1275,10 +1408,9 @@ function applyGlobalDither(work, result, ditherMode, getColorsAt) {
       const r = Math.max(0, Math.min(255, temp[idx]));
       const g = Math.max(0, Math.min(255, temp[idx+1]));
       const b = Math.max(0, Math.min(255, temp[idx+2]));
-      const { ink, paper } = getColorsAt(x, y);
-      const d0 = colorDist([r, g, b], ink);
-      const d1 = colorDist([r, g, b], paper);
-      const chosen = d0 <= d1 ? ink : paper;
+      const colors = getColorsAt(x, y);
+      const ci = quantizeNearest(r, g, b, colors);
+      const chosen = colors[ci];
       result[idx]     = chosen[0];
       result[idx + 1] = chosen[1];
       result[idx + 2] = chosen[2];
@@ -1294,79 +1426,6 @@ function applyGlobalDither(work, result, ditherMode, getColorsAt) {
             temp[nIdx]     += er * weight;
             temp[nIdx + 1] += eg * weight;
             temp[nIdx + 2] += eb * weight;
-          }
-        }
-      }
-    }
-  }
-}
-
-// --- Apply dithering to a block and write final pixels ---
-// (Still used for per-block scoring during color search; for the final
-// output pass we use applyGlobalDither above.)
-function applyBlockDither(work, result, bx, by, bw, bh, inkColor, paperColor, ditherMode) {
-  if (isThresholdDither(ditherMode)) {
-    for (let py = 0; py < bh; py++) {
-      for (let px = 0; px < bw; px++) {
-        const idx = ((by + py) * screenWidth + (bx + px)) * 3;
-        const r = Math.max(0, Math.min(255, work[idx]));
-        const g = Math.max(0, Math.min(255, work[idx+1]));
-        const b = Math.max(0, Math.min(255, work[idx+2]));
-
-        const factor = blendFactor(r, g, b, inkColor, paperColor, ditherMode);
-        const threshold = getThreshold(ditherMode, bx + px, by + py);
-        const chosen = factor > threshold ? paperColor : inkColor;
-
-        result[idx]     = chosen[0];
-        result[idx + 1] = chosen[1];
-        result[idx + 2] = chosen[2];
-      }
-    }
-  } else {
-    // Error diffusion (or none)
-    const tempW = bw, tempH = bh;
-    const temp = new Float64Array(tempW * tempH * 3);
-    for (let py = 0; py < bh; py++) {
-      for (let px = 0; px < bw; px++) {
-        const srcIdx = ((by + py) * screenWidth + (bx + px)) * 3;
-        const tIdx = (py * tempW + px) * 3;
-        temp[tIdx]     = work[srcIdx];
-        temp[tIdx + 1] = work[srcIdx + 1];
-        temp[tIdx + 2] = work[srcIdx + 2];
-      }
-    }
-
-    const kernel = DIFFUSION_KERNELS[ditherMode];
-
-    for (let py = 0; py < bh; py++) {
-      for (let px = 0; px < bw; px++) {
-        const tIdx = (py * tempW + px) * 3;
-        const r = Math.max(0, Math.min(255, temp[tIdx]));
-        const g = Math.max(0, Math.min(255, temp[tIdx+1]));
-        const b = Math.max(0, Math.min(255, temp[tIdx+2]));
-        const pixel = [r, g, b];
-
-        const d0 = colorDist(pixel, inkColor);
-        const d1 = colorDist(pixel, paperColor);
-        const chosen = d0 <= d1 ? inkColor : paperColor;
-
-        const outIdx = ((by + py) * screenWidth + (bx + px)) * 3;
-        result[outIdx]     = chosen[0];
-        result[outIdx + 1] = chosen[1];
-        result[outIdx + 2] = chosen[2];
-
-        if (kernel) {
-          const er = r - chosen[0];
-          const eg = g - chosen[1];
-          const eb = b - chosen[2];
-          for (const [dx, dy, weight] of kernel) {
-            const nx = px + dx, ny = py + dy;
-            if (nx >= 0 && nx < tempW && ny >= 0 && ny < tempH) {
-              const nIdx = (ny * tempW + nx) * 3;
-              temp[nIdx]     += er * weight;
-              temp[nIdx + 1] += eg * weight;
-              temp[nIdx + 2] += eb * weight;
-            }
           }
         }
       }
