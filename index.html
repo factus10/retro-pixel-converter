@@ -321,9 +321,24 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="control-group">
       <h3>Display Mode</h3>
       <select id="displayMode">
-        <option value="standard">Standard Spectrum (256×192, 8×8 attrs)</option>
-        <option value="ecm">Timex Extended Color (256×192, 8×1 attrs)</option>
-        <option value="hires">Timex 64-col hi-res (512×192 mono)</option>
+        <optgroup label="ZX Spectrum / Timex">
+          <option value="standard">Standard Spectrum (256×192, 8×8 attrs)</option>
+          <option value="ecm">Timex Extended Color (256×192, 8×1 attrs)</option>
+          <option value="hires">Timex 64-col hi-res (512×192 mono)</option>
+        </optgroup>
+        <optgroup label="Commodore 64">
+          <option value="c64-hires">C64 Hi-res (320×200, 2/16 per 8×8)</option>
+          <option value="c64-koala">C64 Multicolor / Koala (160×200)</option>
+        </optgroup>
+        <optgroup label="Atari 800">
+          <option value="atari-gr15">Atari GR.15 / ANTIC E (160×192, 4col)</option>
+          <option value="atari-gr8">Atari GR.8 (320×192 mono)</option>
+          <option value="atari-gr9">Atari GR.9 (80×192, 16 lumas)</option>
+        </optgroup>
+        <optgroup label="Sinclair QL">
+          <option value="ql-mode8">QL Mode 8 / Low Res (256×256, 8col)</option>
+          <option value="ql-mode4">QL Mode 4 / High Res (512×256, 4col)</option>
+        </optgroup>
       </select>
     </div>
 
@@ -355,6 +370,29 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
         <input type="checkbox" id="hiresBright">
         Bright
       </label>
+    </div>
+
+    <div class="control-group" id="atariHueGroup" style="display:none;">
+      <h3>Atari Hue</h3>
+      <label>Hue (0 = grayscale)</label>
+      <select id="atariHue">
+        <option value="0" selected>0 - Gray</option>
+        <option value="1">1 - Gold</option>
+        <option value="2">2 - Orange</option>
+        <option value="3">3 - Red-orange</option>
+        <option value="4">4 - Pink</option>
+        <option value="5">5 - Magenta</option>
+        <option value="6">6 - Purple</option>
+        <option value="7">7 - Blue-purple</option>
+        <option value="8">8 - Blue</option>
+        <option value="9">9 - Light blue</option>
+        <option value="10">10 - Cyan</option>
+        <option value="11">11 - Blue-green</option>
+        <option value="12">12 - Green</option>
+        <option value="13">13 - Yellow-green</option>
+        <option value="14">14 - Orange-green</option>
+        <option value="15">15 - Yellow</option>
+      </select>
     </div>
 
     <div class="control-group">
@@ -425,7 +463,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     <div class="export-group">
       <h3>Export Binary</h3>
       <div class="export-row">
-        <button class="btn-primary" id="exportScr" disabled>Download .SCR</button>
+        <button class="btn-primary" id="exportBin" disabled>Download binary</button>
         <button class="btn-accent" id="exportTap" disabled>Download .TAP</button>
       </div>
     </div>
@@ -729,23 +767,125 @@ const MODES = {
     blockW: 8, blockH: 8, colorsPerBlock: 2,
     palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
     mandatoryColor: null,
+    searchStrategy: 'exhaustive',
     colorful: true, port: 0, label: 'standard',
+    ext: 'scr', supportsTap: true,
   },
   ecm: {
     w: 256, h: 192, aspect: 1,
     blockW: 8, blockH: 1, colorsPerBlock: 2,
     palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
     mandatoryColor: null,
+    searchStrategy: 'exhaustive',
     colorful: true, port: 2, label: 'ecm',
+    ext: 'scr', supportsTap: true,
   },
   hires: {
     w: 512, h: 192, aspect: 0.5,
     blockW: 512, blockH: 192, colorsPerBlock: 2,
     palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
     mandatoryColor: null,
+    searchStrategy: 'user-picked',
     colorful: false, port: 6, label: 'hires',
+    ext: 'scr', supportsTap: true,
+  },
+  'c64-hires': {
+    w: 320, h: 200, aspect: 0.9365,
+    blockW: 8, blockH: 8, colorsPerBlock: 2,
+    palettes: [PALETTE_C64],
+    mandatoryColor: null,
+    searchStrategy: 'exhaustive',
+    colorful: true, label: 'c64-hires',
+    ext: 'prg', supportsTap: false,
+  },
+  'c64-koala': {
+    w: 160, h: 200, aspect: 1.873,
+    blockW: 4, blockH: 8, colorsPerBlock: 4,
+    palettes: [PALETTE_C64],
+    mandatoryColor: 'auto-bg', // auto-pick single global bg
+    searchStrategy: 'exhaustive',
+    colorful: true, label: 'c64-koala',
+    ext: 'kla', supportsTap: false,
+  },
+  'atari-gr15': {
+    w: 160, h: 192, aspect: 2.0,
+    blockW: 160, blockH: 192, colorsPerBlock: 4,
+    palettes: [PALETTE_ATARI],
+    mandatoryColor: null,
+    searchStrategy: 'global-prequantize',
+    colorful: true, label: 'atari-gr15',
+    ext: 'mic', supportsTap: false,
+  },
+  'atari-gr8': {
+    w: 320, h: 192, aspect: 1.0,
+    blockW: 320, blockH: 192, colorsPerBlock: 2,
+    palettes: [PALETTE_ATARI],
+    mandatoryColor: null,
+    searchStrategy: 'user-picked',
+    colorful: false, label: 'atari-gr8',
+    ext: 'gr8', supportsTap: false,
+  },
+  'atari-gr9': {
+    w: 80, h: 192, aspect: 4.0,
+    blockW: 1, blockH: 1, colorsPerBlock: 16,
+    palettes: [], // filled dynamically from hue pick
+    mandatoryColor: null,
+    searchStrategy: 'pixel-direct',
+    colorful: true, label: 'atari-gr9',
+    ext: 'gr9', supportsTap: false,
+  },
+  'ql-mode8': {
+    w: 256, h: 256, aspect: 1.47,
+    blockW: 1, blockH: 1, colorsPerBlock: 8,
+    palettes: [PALETTE_QL],
+    mandatoryColor: null,
+    searchStrategy: 'pixel-direct',
+    colorful: true, label: 'ql-mode8',
+    ext: '_scr', supportsTap: false,
+  },
+  'ql-mode4': {
+    w: 512, h: 256, aspect: 0.74,
+    blockW: 1, blockH: 1, colorsPerBlock: 4,
+    palettes: [PALETTE_QL_MODE4],
+    mandatoryColor: null,
+    searchStrategy: 'pixel-direct',
+    colorful: true, label: 'ql-mode4',
+    ext: '_scr', supportsTap: false,
   },
 };
+
+// Generator for N-combinations of indices [0..paletteSize-1].
+// If mandatoryIndex is non-null, one slot is fixed to mandatoryIndex.
+function* generateCombinations(paletteSize, n, mandatoryIndex) {
+  if (mandatoryIndex !== null && mandatoryIndex !== undefined) {
+    // Choose (n-1) from remaining
+    const remaining = [];
+    for (let i = 0; i < paletteSize; i++) if (i !== mandatoryIndex) remaining.push(i);
+    const k = n - 1;
+    const combo = new Array(k);
+    function* rec(start, depth) {
+      if (depth === k) {
+        yield [mandatoryIndex, ...combo];
+        return;
+      }
+      for (let i = start; i < remaining.length; i++) {
+        combo[depth] = remaining[i];
+        yield* rec(i + 1, depth + 1);
+      }
+    }
+    yield* rec(0, 0);
+    return;
+  }
+  const combo = new Array(n);
+  function* rec(start, depth) {
+    if (depth === n) { yield combo.slice(); return; }
+    for (let i = start; i < paletteSize; i++) {
+      combo[depth] = i;
+      yield* rec(i + 1, depth + 1);
+    }
+  }
+  yield* rec(0, 0);
+}
 
 // --- State ---
 let sourceImage = null;       // HTMLImageElement
@@ -972,7 +1112,7 @@ $('lockAspect').addEventListener('change', e => {
 });
 
 // --- Settings change triggers reconvert ---
-for (const id of ['displayMode', 'ditherMode', 'colorStrategy', 'inkColor', 'paperColor', 'hiresBright', 'brightness', 'contrast', 'saturation', 'showGrid']) {
+for (const id of ['displayMode', 'ditherMode', 'colorStrategy', 'inkColor', 'paperColor', 'hiresBright', 'atariHue', 'brightness', 'contrast', 'saturation', 'showGrid']) {
   $(id).addEventListener('input', () => {
     if (id === 'brightness') $('brightnessVal').textContent = $(id).value;
     if (id === 'contrast') $('contrastVal').textContent = $(id).value;
@@ -984,8 +1124,17 @@ for (const id of ['displayMode', 'ditherMode', 'colorStrategy', 'inkColor', 'pap
 
 function updateModeUI() {
   const mode = $('displayMode').value;
-  $('hiresColorsGroup').style.display = mode === 'hires' ? '' : 'none';
-  $('colorStrategyGroup').style.display = mode === 'hires' ? 'none' : '';
+  const cfg = MODES[mode] || MODES.standard;
+  $('hiresColorsGroup').style.display = (mode === 'hires' || mode === 'atari-gr8') ? '' : 'none';
+  $('colorStrategyGroup').style.display = cfg.searchStrategy === 'exhaustive' ? '' : 'none';
+  $('atariHueGroup').style.display = mode === 'atari-gr9' ? '' : 'none';
+  $('exportTap').style.display = cfg.supportsTap ? '' : 'none';
+  const btn = $('exportBin');
+  if (btn) {
+    const ext = cfg.ext;
+    const label = ext.startsWith('_') ? ext : '.' + ext;
+    btn.textContent = `Download ${label}`;
+  }
 }
 updateModeUI();
 
@@ -1109,26 +1258,34 @@ function convert() {
     const resultPixels = new Uint8Array(screenWidth * screenHeight * 3);
     let attrs = null;
 
-    // Per-block color picks, keyed [by][bx] → { ink, paper }
+    // Per-block color picks, keyed [by][bx] → array of RGB triples.
+    // blockIndices parallel-tracks palette indices for binary encoding.
     let blockColors = null;
+    let blockIndices = null;
+    let modeMeta = {};
     let bW, bH, numAttrCols, numAttrRows;
 
-    if (modeCfg.colorful) {
-      // Standard or ECM mode: per-block color search
-      bW = modeCfg.blockW;
-      bH = modeCfg.blockH;
-      numAttrCols = screenWidth / bW;
-      numAttrRows = screenHeight / bH;
+    bW = modeCfg.blockW;
+    bH = modeCfg.blockH;
+    numAttrCols = Math.max(1, Math.round(screenWidth / bW));
+    numAttrRows = Math.max(1, Math.round(screenHeight / bH));
+
+    const strategy = modeCfg.searchStrategy;
+
+    // Initialize blockColors/blockIndices grids
+    blockColors = new Array(numAttrRows);
+    blockIndices = new Array(numAttrRows);
+    for (let by = 0; by < numAttrRows; by++) {
+      blockColors[by] = new Array(numAttrCols);
+      blockIndices[by] = new Array(numAttrCols);
+    }
+
+    if (strategy === 'exhaustive' && (currentMode === 'standard' || currentMode === 'ecm')) {
       attrs = new Uint8Array(numAttrCols * numAttrRows);
-      blockColors = new Array(numAttrRows);
-
       for (let by = 0; by < numAttrRows; by++) {
-        blockColors[by] = new Array(numAttrCols);
         for (let bx = 0; bx < numAttrCols; bx++) {
-          const blockX = bx * bW;
-          const blockY = by * bH;
-
-          let bestInk, bestPaper, bestBright, bestError = Infinity;
+          const blockX = bx * bW, blockY = by * bH;
+          let bestInk = 0, bestPaper = 0, bestBright = 0, bestError = Infinity;
 
           if (colorStrategy === 'per-block') {
             for (let bright = 0; bright <= 1; bright++) {
@@ -1138,19 +1295,13 @@ function convert() {
                   const err = evaluateBlock(work, blockX, blockY, bW, bH,
                                             [pal[ink], pal[paper]], ditherMode);
                   if (err < bestError) {
-                    bestError = err;
-                    bestInk = ink;
-                    bestPaper = paper;
-                    bestBright = bright;
+                    bestError = err; bestInk = ink; bestPaper = paper; bestBright = bright;
                   }
                 }
               }
             }
           } else {
-            // Global pre-quantize
-            bestBright = 0; bestInk = 0; bestPaper = 7;
             const colorCounts = new Map();
-
             for (let py = 0; py < bH; py++) {
               for (let px = 0; px < bW; px++) {
                 const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
@@ -1162,56 +1313,201 @@ function convert() {
                 colorCounts.set(key, (colorCounts.get(key) || 0) + 1);
               }
             }
-
             const sorted = [...colorCounts.entries()].sort((a, b) => b[1] - a[1]);
-
             if (sorted.length >= 2) {
               const candidates = sorted.slice(0, Math.min(6, sorted.length));
-              bestError = Infinity;
-
               for (let i = 0; i < candidates.length; i++) {
                 for (let j = i; j < candidates.length; j++) {
-                  const c1key = candidates[i][0];
-                  const c2key = candidates[j][0];
-                  const c1idx = c1key & 7;
-                  const c2idx = c2key & 7;
-
+                  const c1idx = candidates[i][0] & 7;
+                  const c2idx = candidates[j][0] & 7;
                   for (let tryBright = 0; tryBright <= 1; tryBright++) {
                     const pal = tryBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
                     const err = evaluateBlock(work, blockX, blockY, bW, bH,
                                               [pal[c1idx], pal[c2idx]], ditherMode);
                     if (err < bestError) {
-                      bestError = err;
-                      bestInk = c1idx;
-                      bestPaper = c2idx;
-                      bestBright = tryBright;
+                      bestError = err; bestInk = c1idx; bestPaper = c2idx; bestBright = tryBright;
                     }
                   }
                 }
               }
             } else if (sorted.length === 1) {
               const key = sorted[0][0];
-              bestBright = key >> 3;
-              bestInk = key & 7;
-              bestPaper = bestInk;
+              bestBright = key >> 3; bestInk = key & 7; bestPaper = bestInk;
             }
           }
-
           const pal = bestBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
           blockColors[by][bx] = [pal[bestInk], pal[bestPaper]];
+          blockIndices[by][bx] = [bestInk, bestPaper];
           attrs[by * numAttrCols + bx] = (bestBright << 6) | (bestPaper << 3) | bestInk;
         }
       }
-    } else {
-      // 64-column monochrome mode: single ink/paper pair, dither whole image
-      const inkIdx = parseInt($('inkColor').value);
-      const paperIdx = parseInt($('paperColor').value);
-      const bright = $('hiresBright').checked ? 1 : 0;
-      const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
-      bW = screenWidth; bH = screenHeight;
+    } else if (strategy === 'exhaustive' && currentMode === 'c64-hires') {
+      const pal = PALETTE_C64;
+      attrs = new Uint8Array(numAttrCols * numAttrRows); // screen RAM
+      for (let by = 0; by < numAttrRows; by++) {
+        for (let bx = 0; bx < numAttrCols; bx++) {
+          const blockX = bx * bW, blockY = by * bH;
+          let bestA = 0, bestB = 1, bestError = Infinity;
+          for (const combo of generateCombinations(16, 2, null)) {
+            const err = evaluateBlock(work, blockX, blockY, bW, bH,
+                                       [pal[combo[0]], pal[combo[1]]], ditherMode);
+            if (err < bestError) { bestError = err; bestA = combo[0]; bestB = combo[1]; }
+          }
+          blockColors[by][bx] = [pal[bestA], pal[bestB]];
+          blockIndices[by][bx] = [bestA, bestB];
+          // Screen RAM: high nibble = fg (matches bit=1), low nibble = bg
+          attrs[by * numAttrCols + bx] = ((bestA & 0x0F) << 4) | (bestB & 0x0F);
+        }
+      }
+    } else if (strategy === 'exhaustive' && currentMode === 'c64-koala') {
+      const pal = PALETTE_C64;
+      // Phase 1: auto-pick shared background.
+      // For speed, sample a stride of blocks with a nearest-color error proxy.
+      let bestBg = 0, bestBgErr = Infinity;
+      for (let bgIdx = 0; bgIdx < 16; bgIdx++) {
+        let totalErr = 0;
+        for (let by = 0; by < numAttrRows; by += 2) {
+          for (let bx = 0; bx < numAttrCols; bx += 2) {
+            const blockX = bx * bW, blockY = by * bH;
+            const counts = new Uint32Array(16);
+            for (let py = 0; py < bH; py++) {
+              for (let px = 0; px < bW; px++) {
+                const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
+                const r = Math.max(0, Math.min(255, work[idx]));
+                const g = Math.max(0, Math.min(255, work[idx+1]));
+                const b = Math.max(0, Math.min(255, work[idx+2]));
+                counts[quantizeNearest(r, g, b, pal)]++;
+              }
+            }
+            const entries = [];
+            for (let i = 0; i < 16; i++) if (i !== bgIdx && counts[i] > 0) entries.push([i, counts[i]]);
+            entries.sort((a, b) => b[1] - a[1]);
+            const chosen = [bgIdx];
+            for (let i = 0; i < 3 && i < entries.length; i++) chosen.push(entries[i][0]);
+            while (chosen.length < 4) chosen.push(bgIdx);
+            const colors = chosen.map(i => pal[i]);
+            for (let py = 0; py < bH; py++) {
+              for (let px = 0; px < bW; px++) {
+                const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
+                const r = Math.max(0, Math.min(255, work[idx]));
+                const g = Math.max(0, Math.min(255, work[idx+1]));
+                const b = Math.max(0, Math.min(255, work[idx+2]));
+                const ci = quantizeNearest(r, g, b, colors);
+                totalErr += colorDist([r, g, b], colors[ci]);
+              }
+            }
+          }
+        }
+        if (totalErr < bestBgErr) { bestBgErr = totalErr; bestBg = bgIdx; }
+      }
+      modeMeta.c64Bg = bestBg;
+
+      // Phase 2: per-block choose 3 non-bg colors
+      for (let by = 0; by < numAttrRows; by++) {
+        for (let bx = 0; bx < numAttrCols; bx++) {
+          const blockX = bx * bW, blockY = by * bH;
+          const counts = new Uint32Array(16);
+          for (let py = 0; py < bH; py++) {
+            for (let px = 0; px < bW; px++) {
+              const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
+              const r = Math.max(0, Math.min(255, work[idx]));
+              const g = Math.max(0, Math.min(255, work[idx+1]));
+              const b = Math.max(0, Math.min(255, work[idx+2]));
+              counts[quantizeNearest(r, g, b, pal)]++;
+            }
+          }
+          const entries = [];
+          for (let i = 0; i < 16; i++) if (i !== bestBg) entries.push([i, counts[i]]);
+          entries.sort((a, b) => b[1] - a[1]);
+          const top = entries.slice(0, 6).map(e => e[0]);
+          while (top.length < 3) {
+            for (let i = 0; i < 16; i++) if (i !== bestBg && !top.includes(i)) { top.push(i); if (top.length >= 3) break; }
+          }
+          let bestColors = [bestBg, top[0], top[1], top[2]];
+          let bestErr = Infinity;
+          for (let i = 0; i < top.length; i++) {
+            for (let j = i + 1; j < top.length; j++) {
+              for (let k = j + 1; k < top.length; k++) {
+                const ids = [bestBg, top[i], top[j], top[k]];
+                const colors = ids.map(x => pal[x]);
+                const err = evaluateBlock(work, blockX, blockY, bW, bH, colors, ditherMode);
+                if (err < bestErr) { bestErr = err; bestColors = ids; }
+              }
+            }
+          }
+          blockColors[by][bx] = bestColors.map(i => pal[i]);
+          blockIndices[by][bx] = bestColors; // [bg, c01, c10, c11]
+        }
+      }
+      attrs = null;
+    } else if (strategy === 'global-prequantize') {
+      const pal = modeCfg.palettes[0];
+      const counts = new Uint32Array(pal.length);
+      for (let y = 0; y < screenHeight; y++) {
+        for (let x = 0; x < screenWidth; x++) {
+          const idx = (y * screenWidth + x) * 3;
+          const r = Math.max(0, Math.min(255, work[idx]));
+          const g = Math.max(0, Math.min(255, work[idx+1]));
+          const b = Math.max(0, Math.min(255, work[idx+2]));
+          counts[quantizeNearest(r, g, b, pal)]++;
+        }
+      }
+      const entries = [];
+      for (let i = 0; i < pal.length; i++) if (counts[i] > 0) entries.push([i, counts[i]]);
+      entries.sort((a, b) => b[1] - a[1]);
+      const chosenIndices = [];
+      for (let i = 0; i < modeCfg.colorsPerBlock && i < entries.length; i++) chosenIndices.push(entries[i][0]);
+      while (chosenIndices.length < modeCfg.colorsPerBlock) chosenIndices.push(0);
+      const chosenRGB = chosenIndices.map(i => pal[i]);
+      blockColors[0][0] = chosenRGB;
+      blockIndices[0][0] = chosenIndices;
+      modeMeta.atariRegs = chosenIndices; // [bg, pf0, pf1, pf2]
+      attrs = null;
+    } else if (strategy === 'pixel-direct') {
+      let pal;
+      if (currentMode === 'atari-gr9') {
+        const hue = parseInt($('atariHue').value) || 0;
+        pal = atariLumaPalette(hue);
+        modeMeta.gr9Hue = hue;
+      } else {
+        pal = modeCfg.palettes[0];
+      }
+      // One logical block that covers everything
       numAttrCols = 1; numAttrRows = 1;
-      blockColors = [[[pal[inkIdx], pal[paperIdx]]]];
-      attrs = new Uint8Array([(bright << 6) | (paperIdx << 3) | inkIdx]);
+      bW = screenWidth; bH = screenHeight;
+      blockColors = [[pal]];
+      blockIndices = [[pal.map((_, i) => i)]];
+      modeMeta.palette = pal;
+      attrs = null;
+    } else if (strategy === 'user-picked') {
+      if (currentMode === 'hires') {
+        const inkIdx = parseInt($('inkColor').value);
+        const paperIdx = parseInt($('paperColor').value);
+        const bright = $('hiresBright').checked ? 1 : 0;
+        const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
+        numAttrCols = 1; numAttrRows = 1;
+        bW = screenWidth; bH = screenHeight;
+        blockColors = [[[pal[inkIdx], pal[paperIdx]]]];
+        blockIndices = [[[inkIdx, paperIdx]]];
+        attrs = new Uint8Array([(bright << 6) | (paperIdx << 3) | inkIdx]);
+      } else if (currentMode === 'atari-gr8') {
+        const inkIdx = parseInt($('inkColor').value);
+        const paperIdx = parseInt($('paperColor').value);
+        const bright = $('hiresBright').checked ? 1 : 0;
+        // Map ink/paper 0-7 onto Atari hues; bright toggles fg luma.
+        const fgLuma = bright ? 7 : 6;
+        const bgLuma = 0;
+        const fgIdx = (inkIdx % 16) * 8 + fgLuma;
+        const bgIdx = (paperIdx % 16) * 8 + bgLuma;
+        const pal = PALETTE_ATARI;
+        numAttrCols = 1; numAttrRows = 1;
+        bW = screenWidth; bH = screenHeight;
+        blockColors = [[[pal[fgIdx], pal[bgIdx]]]];
+        blockIndices = [[[fgIdx, bgIdx]]];
+        modeMeta.atariFg = fgIdx;
+        modeMeta.atariBg = bgIdx;
+        attrs = null;
+      }
     }
 
     // Global dither pass: errors propagate across block boundaries.
@@ -1227,6 +1523,7 @@ function convert() {
     convertedAttrs = attrs;
 
     // Generate binary + TAP blocks for current mode
+    tapBlocks = null;
     if (currentMode === 'standard') {
       scrBytes = generateStandardScreen(resultPixels, attrs);
       tapBlocks = [{ data: scrBytes, addr: 0x4000, name: 'screen' }];
@@ -1239,7 +1536,7 @@ function convert() {
         { data: pixBytes,  addr: 0x4000, name: 'ecm-pix' },
         { data: attrBytes, addr: 0x6000, name: 'ecm-atr' },
       ];
-    } else {
+    } else if (currentMode === 'hires') {
       const { df1, df2 } = generate64ColScreen(resultPixels, attrs);
       scrBytes = new Uint8Array(df1.length + df2.length);
       scrBytes.set(df1, 0);
@@ -1248,6 +1545,20 @@ function convert() {
         { data: df1, addr: 0x4000, name: 'hi-df1' },
         { data: df2, addr: 0x6000, name: 'hi-df2' },
       ];
+    } else if (currentMode === 'c64-hires') {
+      scrBytes = generateC64Hires(resultPixels, blockColors, blockIndices);
+    } else if (currentMode === 'c64-koala') {
+      scrBytes = generateC64Koala(resultPixels, blockColors, blockIndices, modeMeta.c64Bg);
+    } else if (currentMode === 'atari-gr15') {
+      scrBytes = generateAtariGr15(resultPixels, modeMeta.atariRegs);
+    } else if (currentMode === 'atari-gr8') {
+      scrBytes = generateAtariGr8(resultPixels, blockColors[0][0]);
+    } else if (currentMode === 'atari-gr9') {
+      scrBytes = generateAtariGr9(resultPixels, modeMeta.palette);
+    } else if (currentMode === 'ql-mode8') {
+      scrBytes = generateQLMode8(resultPixels);
+    } else if (currentMode === 'ql-mode4') {
+      scrBytes = generateQLMode4(resultPixels);
     }
 
     // Render converted preview
@@ -1258,7 +1569,7 @@ function convert() {
     statusSize.textContent = `${scrBytes.length} bytes`;
 
     // Enable export buttons
-    for (const id of ['exportScr','exportTap','exportPng1x','exportPng2x','exportPng4x','exportJpg1x','exportJpg2x','exportJpg4x']) {
+    for (const id of ['exportBin','exportTap','exportPng1x','exportPng2x','exportPng4x','exportJpg1x','exportJpg2x','exportJpg4x']) {
       $(id).disabled = false;
     }
   }, 10);
@@ -1547,6 +1858,230 @@ function generate64ColScreen(pixels, attrs) {
   return { df1, df2 };
 }
 
+// ==============================================================
+// C64 Hi-res (Art Studio .prg): load address + 8000 bitmap + 1000 screen
+// Total: 2 + 8000 + 1000 = 9002 bytes
+// ==============================================================
+function generateC64Hires(pixels, blockColors, blockIndices) {
+  const out = new Uint8Array(2 + 8000 + 1000);
+  out[0] = 0x00; out[1] = 0x20; // load at $2000
+  const bitmap = out.subarray(2, 2 + 8000);
+  const screen = out.subarray(2 + 8000, 2 + 8000 + 1000);
+
+  const W = 320, H = 200;
+  for (let row = 0; row < 25; row++) {
+    for (let col = 0; col < 40; col++) {
+      const [fgIdx, bgIdx] = blockIndices[row][col];
+      screen[row * 40 + col] = ((fgIdx & 0x0F) << 4) | (bgIdx & 0x0F);
+      const fgRGB = blockColors[row][col][0];
+      const bgRGB = blockColors[row][col][1];
+      for (let sy = 0; sy < 8; sy++) {
+        const y = row * 8 + sy;
+        let byte = 0;
+        for (let sx = 0; sx < 8; sx++) {
+          const x = col * 8 + sx;
+          const pIdx = (y * W + x) * 3;
+          const px = [pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2]];
+          const dFg = colorDist(px, fgRGB);
+          const dBg = colorDist(px, bgRGB);
+          if (dFg <= dBg) byte |= (0x80 >> sx);
+        }
+        bitmap[(row * 40 + col) * 8 + sy] = byte;
+      }
+    }
+  }
+  return out;
+}
+
+// ==============================================================
+// C64 Koala (.kla): 2 bytes load + 8000 bitmap + 1000 screen + 1000 color + 1 bg
+// Total: 10003 bytes
+// ==============================================================
+function generateC64Koala(pixels, blockColors, blockIndices, bgIdx) {
+  const out = new Uint8Array(10003);
+  out[0] = 0x00; out[1] = 0x60; // load at $6000
+  const bitmap = out.subarray(2, 2 + 8000);
+  const screen = out.subarray(2 + 8000, 2 + 9000);
+  const colorRam = out.subarray(2 + 9000, 2 + 10000);
+  out[10002] = bgIdx & 0x0F;
+
+  const W = 160;
+  // 40 cells × 25 rows, each cell 4×8 source pixels (koala = half-width)
+  for (let row = 0; row < 25; row++) {
+    for (let col = 0; col < 40; col++) {
+      const ids = blockIndices[row][col]; // [bg, c01, c10, c11]
+      const colors = blockColors[row][col];
+      // bg is ids[0]=bgIdx; screen hi-nib = c01, lo-nib = c10; colorRam = c11
+      screen[row * 40 + col] = ((ids[1] & 0x0F) << 4) | (ids[2] & 0x0F);
+      colorRam[row * 40 + col] = ids[3] & 0x0F;
+
+      for (let sy = 0; sy < 8; sy++) {
+        const y = row * 8 + sy;
+        let byte = 0;
+        for (let sx = 0; sx < 4; sx++) {
+          const x = col * 4 + sx;
+          const pIdx = (y * W + x) * 3;
+          const px = [pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2]];
+          let best = 0, bestD = Infinity;
+          for (let k = 0; k < 4; k++) {
+            const d = colorDist(px, colors[k]);
+            if (d < bestD) { bestD = d; best = k; }
+          }
+          // bit pair within byte: leftmost pixel = bits 7-6
+          const shift = (3 - sx) * 2;
+          byte |= (best & 0x03) << shift;
+        }
+        bitmap[(row * 40 + col) * 8 + sy] = byte;
+      }
+    }
+  }
+  return out;
+}
+
+// ==============================================================
+// Atari GR.15 (MicroPainter .mic): 7680 bitmap + 4 color registers = 7684
+// 160×192, 2 bits/pixel, 40 bytes/line
+// ==============================================================
+function generateAtariGr15(pixels, regIndices) {
+  // regIndices = [bg, pf0, pf1, pf2] palette indices into PALETTE_ATARI
+  const W = 160, H = 192;
+  const out = new Uint8Array(7684);
+  const bitmap = out.subarray(0, 7680);
+  const colors = regIndices.map(i => PALETTE_ATARI[i]);
+  for (let y = 0; y < H; y++) {
+    for (let xb = 0; xb < 40; xb++) {
+      let byte = 0;
+      for (let sx = 0; sx < 4; sx++) {
+        const x = xb * 4 + sx;
+        const pIdx = (y * W + x) * 3;
+        const px = [pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2]];
+        let best = 0, bestD = Infinity;
+        for (let k = 0; k < 4; k++) {
+          const d = colorDist(px, colors[k]);
+          if (d < bestD) { bestD = d; best = k; }
+        }
+        const shift = (3 - sx) * 2;
+        byte |= (best & 0x03) << shift;
+      }
+      bitmap[y * 40 + xb] = byte;
+    }
+  }
+  // Registers: COLBK, COLPF0, COLPF1, COLPF2 — Atari HW register value = paletteIndex * 2
+  // (128-color palette; registers are 8-bit hue/luma)
+  for (let i = 0; i < 4; i++) out[7680 + i] = (regIndices[i] * 2) & 0xFE;
+  return out;
+}
+
+// ==============================================================
+// Atari GR.8: 320×192 mono, 7680 bytes, 1 bpp, MSB-first, 40 bytes/line
+// ==============================================================
+function generateAtariGr8(pixels, colorPair) {
+  const W = 320, H = 192;
+  const out = new Uint8Array(7680);
+  const fg = colorPair[0], bg = colorPair[1];
+  for (let y = 0; y < H; y++) {
+    for (let xb = 0; xb < 40; xb++) {
+      let byte = 0;
+      for (let sx = 0; sx < 8; sx++) {
+        const x = xb * 8 + sx;
+        const pIdx = (y * W + x) * 3;
+        const px = [pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2]];
+        if (colorDist(px, fg) <= colorDist(px, bg)) byte |= (0x80 >> sx);
+      }
+      out[y * 40 + xb] = byte;
+    }
+  }
+  return out;
+}
+
+// ==============================================================
+// Atari GR.9: 80×192, 16 lumas of one hue, 4 bpp, 40 bytes/line = 7680 bytes
+// High nibble = left pixel, low nibble = right pixel.
+// ==============================================================
+function generateAtariGr9(pixels, palette) {
+  const W = 80, H = 192;
+  const out = new Uint8Array(7680);
+  for (let y = 0; y < H; y++) {
+    for (let xb = 0; xb < 40; xb++) {
+      const x0 = xb * 2;
+      const x1 = xb * 2 + 1;
+      const p0 = (y * W + x0) * 3;
+      const p1 = (y * W + x1) * 3;
+      const n0 = quantizeNearest(pixels[p0], pixels[p0+1], pixels[p0+2], palette) & 0x0F;
+      const n1 = quantizeNearest(pixels[p1], pixels[p1+1], pixels[p1+2], palette) & 0x0F;
+      out[y * 40 + xb] = (n0 << 4) | n1;
+    }
+  }
+  return out;
+}
+
+// ==============================================================
+// QL Mode 8 (Low Res): 256×256, 8 colors, 32768 bytes total
+// 4 pixels per 16-bit big-endian word. Interleaved G/F (high byte), R/B (low).
+// Color bits: G | R | B (LSB=B); flash=0.
+// ==============================================================
+function generateQLMode8(pixels) {
+  const W = 256, H = 256;
+  const out = new Uint8Array(32768);
+  const pal = PALETTE_QL; // black, blue(B), red(R), magenta(R+B), green(G), cyan(G+B), yellow(G+R), white(G+R+B)
+  for (let y = 0; y < H; y++) {
+    for (let w = 0; w < 64; w++) {
+      // 4 pixels per word
+      let hi = 0, lo = 0;
+      for (let p = 0; p < 4; p++) {
+        const x = w * 4 + p;
+        const pIdx = (y * W + x) * 3;
+        const ci = quantizeNearest(pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2], pal);
+        // ci: 0=black, 1=B, 2=R, 3=R+B, 4=G, 5=G+B, 6=G+R, 7=G+R+B
+        const G = (ci >> 2) & 1;
+        const R = (ci >> 1) & 1;
+        const B = ci & 1;
+        const F = 0;
+        // High byte: for pixel p (0..3), green at bit (7 - 2p), flash at bit (6 - 2p)
+        hi |= (G << (7 - 2 * p));
+        hi |= (F << (6 - 2 * p));
+        // Low byte: red at bit (7 - 2p), blue at bit (6 - 2p)
+        lo |= (R << (7 - 2 * p));
+        lo |= (B << (6 - 2 * p));
+      }
+      const off = y * 128 + w * 2;
+      out[off] = hi;
+      out[off + 1] = lo;
+    }
+  }
+  return out;
+}
+
+// ==============================================================
+// QL Mode 4 (High Res): 512×256, 4 colors (black/red/green/white), 32768 bytes
+// 8 pixels per 16-bit big-endian word. High byte=G plane, low byte=R plane.
+// Color = (G<<1) | R.
+// ==============================================================
+function generateQLMode4(pixels) {
+  const W = 512, H = 256;
+  const out = new Uint8Array(32768);
+  const pal = PALETTE_QL_MODE4;
+  for (let y = 0; y < H; y++) {
+    for (let w = 0; w < 64; w++) {
+      let hi = 0, lo = 0;
+      for (let p = 0; p < 8; p++) {
+        const x = w * 8 + p;
+        const pIdx = (y * W + x) * 3;
+        const ci = quantizeNearest(pixels[pIdx], pixels[pIdx+1], pixels[pIdx+2], pal);
+        // ci: 0=blk,1=R,2=G,3=W
+        const R = ci & 1;
+        const G = (ci >> 1) & 1;
+        hi |= (G << (7 - p));
+        lo |= (R << (7 - p));
+      }
+      const off = y * 128 + w * 2;
+      out[off] = hi;
+      out[off + 1] = lo;
+    }
+  }
+  return out;
+}
+
 // --- TAP file generation (supports multiple CODE blocks) ---
 function makeTapPair(data, addr, name) {
   // Filename padded to 10 chars
@@ -1718,11 +2253,14 @@ function exportImage(format, scale) {
 }
 
 // --- Export event handlers ---
-$('exportScr').addEventListener('click', () => {
+$('exportBin').addEventListener('click', () => {
   if (!scrBytes) return;
-  const label = MODES[currentMode].label;
+  const cfg = MODES[currentMode];
+  const label = cfg.label;
+  const ext = cfg.ext;
+  const sep = ext.startsWith('_') ? '' : '.';
   downloadBlob(new Blob([scrBytes], { type: 'application/octet-stream' }),
-               `image_${label}.scr`);
+               `image_${label}${sep}${ext}`);
 });
 
 $('exportTap').addEventListener('click', () => {
