@@ -39,7 +39,7 @@ A browser-based image converter that turns JPG/PNG images into ZX Spectrum SCREE
 
 ## How it works
 
-The ZX Spectrum has a famously constrained display: 256×192 pixels with only 2 colors (ink + paper) per 8×8 attribute block, drawn from a 15-color palette (8 hues × 2 brightness levels, minus duplicated black). This creates the classic "color clash" effect.
+The ZX Spectrum has a famously constrained display: 256×192 pixels with only 2 colors (ink + paper) per 8×8 attribute block, drawn from a 16-color palette (8 hues × 2 brightness levels). On a TS 2068, BRIGHT 1 INK 0 is a distinct dark gray (~#606060) rather than pure black, giving 16 usable colors instead of 15; on an original ZX Spectrum, bright black displays as black. This creates the classic "color clash" effect.
 
 For each attribute block, Spectrum Image Maker finds the optimal ink/paper/bright combination by dithering the block with each candidate pair and measuring total perceptual error (weighted RGB distance, with green weighted highest to match human vision). The chosen attributes and dithered pixel pattern are then written to a Spectrum-layout screen buffer using the correct interleaved memory addressing:
 

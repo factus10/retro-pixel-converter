@@ -493,7 +493,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 (() => {
 'use strict';
 
-// --- ZX Spectrum Color Palette ---
+// --- Color Palettes ---
+// Standard ZX Spectrum palette (BRIGHT 0)
 const PALETTE_NORMAL = [
   [0, 0, 0],       // 0 black
   [0, 0, 205],     // 1 blue
@@ -505,8 +506,13 @@ const PALETTE_NORMAL = [
   [205, 205, 205], // 7 white
 ];
 
+// TS 2068 / Timex bright palette (BRIGHT 1).
+// NOTE: On TS 2068, bright black is dark gray (~#606060), not pure black.
+// On original ZX Spectrum, bright black = black (but that can't be represented
+// distinctly from normal black, so we use TS 2068's value for best quality on
+// Timex hardware; rendered as plain black on non-Timex Spectrum.)
 const PALETTE_BRIGHT = [
-  [0, 0, 0],       // 0 black (same)
+  [96, 96, 96],    // 0 dark gray (TS 2068 'bright black')
   [0, 0, 255],     // 1 blue
   [255, 0, 0],     // 2 red
   [255, 0, 255],   // 3 magenta
@@ -516,18 +522,20 @@ const PALETTE_BRIGHT = [
   [255, 255, 255], // 7 white
 ];
 
-// All 15 unique Spectrum colors (both brightness levels, deduplicated black)
+// All 16 distinct TS 2068 colors (8 normal + 8 bright, no duplicated black)
 const ALL_COLORS = [];
 for (let i = 0; i < 8; i++) ALL_COLORS.push({ rgb: PALETTE_NORMAL[i], bright: 0, index: i });
-for (let i = 1; i < 8; i++) ALL_COLORS.push({ rgb: PALETTE_BRIGHT[i], bright: 1, index: i });
+for (let i = 0; i < 8; i++) ALL_COLORS.push({ rgb: PALETTE_BRIGHT[i], bright: 1, index: i });
 
 // --- Perceptual Color Distance (weighted Euclidean) ---
+// Weights loosely follow BT.601 luma contributions (R≈0.30, G≈0.59, B≈0.11):
+// green is weighted highest, then red, then blue (human vision is least
+// sensitive to blue).
 function colorDist(a, b) {
   const dr = a[0] - b[0];
   const dg = a[1] - b[1];
   const db = a[2] - b[2];
-  // Weight green most, red next, blue least (human perception)
-  return 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+  return 3 * dr * dr + 4 * dg * dg + 2 * db * db;
 }
 
 function nearestSpectrumColor(r, g, b) {
@@ -601,12 +609,37 @@ function blendFactor(r, g, b, c0, c1, mode) {
 }
 
 // --- Display modes ---
-// blockW/blockH = attribute block size; colorful = uses per-block color search
-// port = Port 0xFF value to set the mode on real hardware
+// Generalized mode config (extensible to other machines like QL):
+//   w, h           — screen resolution in source pixels
+//   aspect         — display pixel aspect ratio (rendered pixel height / width);
+//                    e.g. 2 = each pixel should be rendered 2x taller than wide
+//                    to match the physical CRT display
+//   blockW, blockH — attribute block size in pixels (1×1 for fully per-pixel)
+//   colorsPerBlock — max distinct colors within a block
+//   palettes       — array of color palettes; a block picks its colors from
+//                    a single palette (Spectrum: normal vs bright)
+//   colorful       — true for auto-search modes, false for user-picked (64-col)
+//   port           — TS 2068 Port 0xFF value (for documentation / future loader)
+//   label          — filename suffix
 const MODES = {
-  standard: { w: 256, h: 192, blockW: 8, blockH: 8, colorful: true,  port: 0, label: 'standard' },
-  ecm:      { w: 256, h: 192, blockW: 8, blockH: 1, colorful: true,  port: 2, label: 'ecm' },
-  hires:    { w: 512, h: 192, blockW: 0, blockH: 0, colorful: false, port: 6, label: 'hires' },
+  standard: {
+    w: 256, h: 192, aspect: 1,
+    blockW: 8, blockH: 8, colorsPerBlock: 2,
+    palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
+    colorful: true, port: 0, label: 'standard',
+  },
+  ecm: {
+    w: 256, h: 192, aspect: 1,
+    blockW: 8, blockH: 1, colorsPerBlock: 2,
+    palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
+    colorful: true, port: 2, label: 'ecm',
+  },
+  hires: {
+    w: 512, h: 192, aspect: 2,
+    blockW: 512, blockH: 192, colorsPerBlock: 2,
+    palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
+    colorful: false, port: 6, label: 'hires',
+  },
 };
 
 // --- State ---
@@ -636,7 +669,8 @@ const statusSize = $('statusSize');
 // --- Init palette strip ---
 function initPaletteStrip() {
   const strip = $('paletteStrip');
-  const all = [...PALETTE_NORMAL, ...PALETTE_BRIGHT.slice(1)];
+  // 16 distinct colors: 8 normal + 8 bright (bright black = TS 2068 dark gray)
+  const all = [...PALETTE_NORMAL, ...PALETTE_BRIGHT];
   for (const c of all) {
     const d = document.createElement('div');
     d.className = 'swatch';
@@ -1420,9 +1454,13 @@ function generateTap(blocks) {
 
 // --- Render converted preview ---
 function renderConvertedPreview(pixels) {
+  const modeCfg = MODES[currentMode] || MODES.standard;
+  const aspect = modeCfg.aspect;
   const scale = getPreviewScale();
-  convertedCanvas.width = screenWidth * scale;
-  convertedCanvas.height = screenHeight * scale;
+  const dispW = screenWidth * scale;
+  const dispH = Math.round(screenHeight * scale * aspect);
+  convertedCanvas.width = dispW;
+  convertedCanvas.height = dispH;
   const ctx = convertedCanvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
 
@@ -1439,37 +1477,39 @@ function renderConvertedPreview(pixels) {
   tempCanvas.width = screenWidth;
   tempCanvas.height = screenHeight;
   tempCanvas.getContext('2d').putImageData(imgData, 0, 0);
-  ctx.drawImage(tempCanvas, 0, 0, screenWidth * scale, screenHeight * scale);
+  // Nearest-neighbor stretch to aspect-corrected size
+  ctx.drawImage(tempCanvas, 0, 0, dispW, dispH);
 
   // Draw attribute grid overlay if enabled
   if ($('showGrid').checked) {
-    const modeCfg = MODES[currentMode] || MODES.standard;
     // For ECM, attribute blocks are 8x1; drawing 192 horizontal lines would be
     // visually overwhelming so we draw the 8x8 character grid instead.
-    const gridW = (modeCfg.colorful ? modeCfg.blockW : 8) * scale;
-    const gridH = 8 * scale;
-    const blockW = gridW;
-    const blockH = gridH;
+    const gridCellW = (modeCfg.colorful ? modeCfg.blockW : 8);
+    const gridCellH = 8;
+    const blockW = gridCellW * scale;
+    const blockH = gridCellH * scale * aspect;
     ctx.strokeStyle = 'rgba(255, 255, 0, 0.3)';
     ctx.lineWidth = 1;
-    for (let x = 0; x <= screenWidth * scale; x += blockW) {
-      ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, screenHeight * scale); ctx.stroke();
+    for (let x = 0; x <= dispW; x += blockW) {
+      ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, dispH); ctx.stroke();
     }
-    for (let y = 0; y <= screenHeight * scale; y += blockH) {
-      ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(screenWidth * scale, y + 0.5); ctx.stroke();
+    for (let y = 0; y <= dispH; y += blockH) {
+      ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(dispW, y + 0.5); ctx.stroke();
     }
   }
 }
 
 function getPreviewScale() {
-  // Auto-scale to fit available space
+  // Auto-scale to fit available space, accounting for mode's pixel aspect ratio
+  const modeCfg = MODES[currentMode] || MODES.standard;
+  const aspect = modeCfg.aspect;
   const wrap = document.querySelector('.canvas-wrap');
   if (!wrap) return 2;
   const maxW = wrap.clientWidth - 16;
   const maxH = wrap.clientHeight - 16;
   if (maxW <= 0 || maxH <= 0) return 2;
   const scaleX = maxW / screenWidth;
-  const scaleY = maxH / screenHeight;
+  const scaleY = maxH / (screenHeight * aspect);
   return Math.max(1, Math.min(4, Math.floor(Math.min(scaleX, scaleY))));
 }
 
@@ -1487,9 +1527,13 @@ function downloadBlob(blob, filename) {
 
 function exportImage(format, scale) {
   if (!convertedPixels) return;
+  const modeCfg = MODES[currentMode] || MODES.standard;
+  const aspect = modeCfg.aspect;
+  const outW = screenWidth * scale;
+  const outH = Math.round(screenHeight * scale * aspect);
   const canvas = document.createElement('canvas');
-  canvas.width = screenWidth * scale;
-  canvas.height = screenHeight * scale;
+  canvas.width = outW;
+  canvas.height = outH;
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingEnabled = false;
 
@@ -1505,12 +1549,12 @@ function exportImage(format, scale) {
   tempCanvas.width = screenWidth;
   tempCanvas.height = screenHeight;
   tempCanvas.getContext('2d').putImageData(imgData, 0, 0);
-  ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
+  ctx.drawImage(tempCanvas, 0, 0, outW, outH);
 
   const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
   const ext = format === 'jpg' ? 'jpg' : 'png';
   canvas.toBlob(blob => {
-    downloadBlob(blob, `spectrum_${screenWidth}x${screenHeight}_${scale}x.${ext}`);
+    downloadBlob(blob, `image_${modeCfg.label}_${outW}x${outH}.${ext}`);
   }, mimeType, format === 'jpg' ? 0.95 : undefined);
 }
 
