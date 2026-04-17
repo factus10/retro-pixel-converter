@@ -108,6 +108,10 @@ python3 -m http.server 8000
 
 ## Credits and references
 
+Special thanks to **Josef Jelinek** for invaluable feedback and technical guidance throughout development — including identifying a weighted color-distance bug, the TS 2068 bright-black-as-dark-grey subtlety, the 64-column mode's 2:1 pixel aspect ratio, the ECM per-block error-diffusion limitation, and the generalized mode-config schema that made Commodore 64, Atari, and QL support straightforward to add.
+
+References:
+
 - **ZX Spectrum / TS 2068**: Sinclair / Timex original hardware manuals (TS 2068 Technical Manual §5.2)
 - **C64 Pepto palette**: Philip "Pepto" Timmermann — pepto.de/projects/colorvic, colodore.com
 - **Atari palette**: computed NTSC palette approximating Altirra / Olivier references
