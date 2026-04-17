@@ -609,35 +609,41 @@ function blendFactor(r, g, b, c0, c1, mode) {
 }
 
 // --- Display modes ---
-// Generalized mode config (extensible to other machines like QL):
-//   w, h           — screen resolution in source pixels
-//   aspect         — display pixel aspect ratio (rendered pixel height / width);
-//                    e.g. 2 = each pixel should be rendered 2x taller than wide
-//                    to match the physical CRT display
-//   blockW, blockH — attribute block size in pixels (1×1 for fully per-pixel)
-//   colorsPerBlock — max distinct colors within a block
-//   palettes       — array of color palettes; a block picks its colors from
-//                    a single palette (Spectrum: normal vs bright)
-//   colorful       — true for auto-search modes, false for user-picked (64-col)
-//   port           — TS 2068 Port 0xFF value (for documentation / future loader)
-//   label          — filename suffix
+// Generalized mode config (extensible to other machines like QL or C64):
+//   w, h            — screen resolution in source pixels
+//   aspect          — pixel aspect ratio (pixel_width / pixel_height).
+//                     1 = square, 0.5 = pixel half as wide as tall (e.g. TS2068
+//                     64-col), 1.47 = pixel wider than tall (QL 256x256)
+//   blockW, blockH  — attribute block size in pixels (1×1 for fully per-pixel)
+//   colorsPerBlock  — max distinct colors within a block
+//   palettes        — array of color palettes; a block picks its colors from
+//                     a single palette (Spectrum: normal vs bright)
+//   mandatoryColor  — if set, one of the block's colors is fixed to this
+//                     palette index (for platforms like C64 where all blocks
+//                     share a background color)
+//   colorful        — true for auto-search modes, false for user-picked (64-col)
+//   port            — TS 2068 Port 0xFF value (documentation / future loader)
+//   label           — filename suffix
 const MODES = {
   standard: {
     w: 256, h: 192, aspect: 1,
     blockW: 8, blockH: 8, colorsPerBlock: 2,
     palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
+    mandatoryColor: null,
     colorful: true, port: 0, label: 'standard',
   },
   ecm: {
     w: 256, h: 192, aspect: 1,
     blockW: 8, blockH: 1, colorsPerBlock: 2,
     palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
+    mandatoryColor: null,
     colorful: true, port: 2, label: 'ecm',
   },
   hires: {
-    w: 512, h: 192, aspect: 2,
+    w: 512, h: 192, aspect: 0.5,
     blockW: 512, blockH: 192, colorsPerBlock: 2,
     palettes: [PALETTE_NORMAL, PALETTE_BRIGHT],
+    mandatoryColor: null,
     colorful: false, port: 6, label: 'hires',
   },
 };
@@ -1004,15 +1010,21 @@ function convert() {
     const resultPixels = new Uint8Array(screenWidth * screenHeight * 3);
     let attrs = null;
 
+    // Per-block color picks, keyed [by][bx] → { ink, paper }
+    let blockColors = null;
+    let bW, bH, numAttrCols, numAttrRows;
+
     if (modeCfg.colorful) {
       // Standard or ECM mode: per-block color search
-      const bW = modeCfg.blockW;
-      const bH = modeCfg.blockH;
-      const numAttrCols = screenWidth / bW;
-      const numAttrRows = screenHeight / bH;
+      bW = modeCfg.blockW;
+      bH = modeCfg.blockH;
+      numAttrCols = screenWidth / bW;
+      numAttrRows = screenHeight / bH;
       attrs = new Uint8Array(numAttrCols * numAttrRows);
+      blockColors = new Array(numAttrRows);
 
       for (let by = 0; by < numAttrRows; by++) {
+        blockColors[by] = new Array(numAttrCols);
         for (let bx = 0; bx < numAttrCols; bx++) {
           const blockX = bx * bW;
           const blockY = by * bH;
@@ -1087,8 +1099,7 @@ function convert() {
           }
 
           const pal = bestBright ? PALETTE_BRIGHT : PALETTE_NORMAL;
-          applyBlockDither(work, resultPixels, blockX, blockY, bW, bH,
-                           pal[bestInk], pal[bestPaper], ditherMode);
+          blockColors[by][bx] = { ink: pal[bestInk], paper: pal[bestPaper] };
           attrs[by * numAttrCols + bx] = (bestBright << 6) | (bestPaper << 3) | bestInk;
         }
       }
@@ -1098,10 +1109,20 @@ function convert() {
       const paperIdx = parseInt($('paperColor').value);
       const bright = $('hiresBright').checked ? 1 : 0;
       const pal = bright ? PALETTE_BRIGHT : PALETTE_NORMAL;
-      applyBlockDither(work, resultPixels, 0, 0, screenWidth, screenHeight,
-                       pal[inkIdx], pal[paperIdx], ditherMode);
+      bW = screenWidth; bH = screenHeight;
+      numAttrCols = 1; numAttrRows = 1;
+      blockColors = [[{ ink: pal[inkIdx], paper: pal[paperIdx] }]];
       attrs = new Uint8Array([(bright << 6) | (paperIdx << 3) | inkIdx]);
     }
+
+    // Global dither pass: errors propagate across block boundaries.
+    // Critical for ECM's 8×1 blocks, where per-block dithering would lose all
+    // vertical error flow.
+    applyGlobalDither(work, resultPixels, ditherMode, (x, y) => {
+      const bx = Math.min(numAttrCols - 1, Math.floor(x / bW));
+      const by = Math.min(numAttrRows - 1, Math.floor(y / bH));
+      return blockColors[by][bx];
+    });
 
     convertedPixels = resultPixels;
     convertedAttrs = attrs;
@@ -1213,7 +1234,76 @@ function evaluateBlock(work, bx, by, bw, bh, color0, color1, ditherMode) {
   return totalError;
 }
 
+// --- Apply dithering globally across the whole image ---
+// Error diffusion propagates across block boundaries (important for ECM where
+// blocks are only 8×1 pixels). Threshold dithers (ordered / blue noise / etc)
+// give the same result per-block or globally since they use global coordinates.
+//
+// getColorsAt(x, y) returns { ink: [r,g,b], paper: [r,g,b] } for the block
+// containing pixel (x, y).
+function applyGlobalDither(work, result, ditherMode, getColorsAt) {
+  const W = screenWidth, H = screenHeight;
+
+  if (isThresholdDither(ditherMode)) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const idx = (y * W + x) * 3;
+        const r = Math.max(0, Math.min(255, work[idx]));
+        const g = Math.max(0, Math.min(255, work[idx+1]));
+        const b = Math.max(0, Math.min(255, work[idx+2]));
+        const { ink, paper } = getColorsAt(x, y);
+        const factor = blendFactor(r, g, b, ink, paper, ditherMode);
+        const threshold = getThreshold(ditherMode, x, y);
+        const chosen = factor > threshold ? paper : ink;
+        result[idx]     = chosen[0];
+        result[idx + 1] = chosen[1];
+        result[idx + 2] = chosen[2];
+      }
+    }
+    return;
+  }
+
+  // Error diffusion (or none): single global pass over the whole image so
+  // errors propagate across block boundaries.
+  const temp = new Float64Array(W * H * 3);
+  for (let i = 0; i < W * H * 3; i++) temp[i] = work[i];
+  const kernel = DIFFUSION_KERNELS[ditherMode];
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = (y * W + x) * 3;
+      const r = Math.max(0, Math.min(255, temp[idx]));
+      const g = Math.max(0, Math.min(255, temp[idx+1]));
+      const b = Math.max(0, Math.min(255, temp[idx+2]));
+      const { ink, paper } = getColorsAt(x, y);
+      const d0 = colorDist([r, g, b], ink);
+      const d1 = colorDist([r, g, b], paper);
+      const chosen = d0 <= d1 ? ink : paper;
+      result[idx]     = chosen[0];
+      result[idx + 1] = chosen[1];
+      result[idx + 2] = chosen[2];
+
+      if (kernel) {
+        const er = r - chosen[0];
+        const eg = g - chosen[1];
+        const eb = b - chosen[2];
+        for (const [dx, dy, weight] of kernel) {
+          const nx = x + dx, ny = y + dy;
+          if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
+            const nIdx = (ny * W + nx) * 3;
+            temp[nIdx]     += er * weight;
+            temp[nIdx + 1] += eg * weight;
+            temp[nIdx + 2] += eb * weight;
+          }
+        }
+      }
+    }
+  }
+}
+
 // --- Apply dithering to a block and write final pixels ---
+// (Still used for per-block scoring during color search; for the final
+// output pass we use applyGlobalDither above.)
 function applyBlockDither(work, result, bx, by, bw, bh, inkColor, paperColor, ditherMode) {
   if (isThresholdDither(ditherMode)) {
     for (let py = 0; py < bh; py++) {
@@ -1453,12 +1543,22 @@ function generateTap(blocks) {
 }
 
 // --- Render converted preview ---
+// Given pixel aspect ratio (w/h), compute per-axis stretch factors so the
+// output preserves physical aspect without shrinking below the source size.
+function stretchFactors(aspect) {
+  // aspect < 1: pixels taller than wide → stretch Y more
+  // aspect > 1: pixels wider than tall → stretch X more
+  return aspect >= 1
+    ? { x: aspect, y: 1 }
+    : { x: 1, y: 1 / aspect };
+}
+
 function renderConvertedPreview(pixels) {
   const modeCfg = MODES[currentMode] || MODES.standard;
-  const aspect = modeCfg.aspect;
+  const { x: stretchX, y: stretchY } = stretchFactors(modeCfg.aspect);
   const scale = getPreviewScale();
-  const dispW = screenWidth * scale;
-  const dispH = Math.round(screenHeight * scale * aspect);
+  const dispW = Math.round(screenWidth * scale * stretchX);
+  const dispH = Math.round(screenHeight * scale * stretchY);
   convertedCanvas.width = dispW;
   convertedCanvas.height = dispH;
   const ctx = convertedCanvas.getContext('2d');
@@ -1486,8 +1586,8 @@ function renderConvertedPreview(pixels) {
     // visually overwhelming so we draw the 8x8 character grid instead.
     const gridCellW = (modeCfg.colorful ? modeCfg.blockW : 8);
     const gridCellH = 8;
-    const blockW = gridCellW * scale;
-    const blockH = gridCellH * scale * aspect;
+    const blockW = gridCellW * scale * stretchX;
+    const blockH = gridCellH * scale * stretchY;
     ctx.strokeStyle = 'rgba(255, 255, 0, 0.3)';
     ctx.lineWidth = 1;
     for (let x = 0; x <= dispW; x += blockW) {
@@ -1502,14 +1602,14 @@ function renderConvertedPreview(pixels) {
 function getPreviewScale() {
   // Auto-scale to fit available space, accounting for mode's pixel aspect ratio
   const modeCfg = MODES[currentMode] || MODES.standard;
-  const aspect = modeCfg.aspect;
+  const { x: stretchX, y: stretchY } = stretchFactors(modeCfg.aspect);
   const wrap = document.querySelector('.canvas-wrap');
   if (!wrap) return 2;
   const maxW = wrap.clientWidth - 16;
   const maxH = wrap.clientHeight - 16;
   if (maxW <= 0 || maxH <= 0) return 2;
-  const scaleX = maxW / screenWidth;
-  const scaleY = maxH / (screenHeight * aspect);
+  const scaleX = maxW / (screenWidth * stretchX);
+  const scaleY = maxH / (screenHeight * stretchY);
   return Math.max(1, Math.min(4, Math.floor(Math.min(scaleX, scaleY))));
 }
 
@@ -1528,9 +1628,9 @@ function downloadBlob(blob, filename) {
 function exportImage(format, scale) {
   if (!convertedPixels) return;
   const modeCfg = MODES[currentMode] || MODES.standard;
-  const aspect = modeCfg.aspect;
-  const outW = screenWidth * scale;
-  const outH = Math.round(screenHeight * scale * aspect);
+  const { x: stretchX, y: stretchY } = stretchFactors(modeCfg.aspect);
+  const outW = Math.round(screenWidth * scale * stretchX);
+  const outH = Math.round(screenHeight * scale * stretchY);
   const canvas = document.createElement('canvas');
   canvas.width = outW;
   canvas.height = outH;
