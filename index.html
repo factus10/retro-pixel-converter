@@ -1190,6 +1190,11 @@ window.addEventListener('mousemove', e => {
     if (dragState.mode === 'move') {
       nx = dragState.startX + dx;
       ny = dragState.startY + dy;
+      // Clamp move within image bounds
+      if (nx < 0) nx = 0;
+      if (ny < 0) ny = 0;
+      if (nx + nw > sourceImage.width)  nx = sourceImage.width  - nw;
+      if (ny + nh > sourceImage.height) ny = sourceImage.height - nh;
     } else {
       const m = dragState.mode;
       if (m.includes('n')) { ny = dragState.startY + dy; nh = dragState.startH - dy; }
@@ -1200,24 +1205,45 @@ window.addEventListener('mousemove', e => {
       if (nh < 10) nh = 10;
 
       if (cropAspectLocked) {
+        // Enforce 4:3 aspect AND respect image bounds simultaneously: compute
+        // the maximum nh allowed by (a) aspect and (b) the image boundary in
+        // the direction we're growing, then clamp nh before deriving nw.
         const targetAR = 4 / 3;
+        const imgW = sourceImage.width, imgH = sourceImage.height;
         const anchorRight = dragState.startX + dragState.startW;
         const anchorBottom = dragState.startY + dragState.startH;
-        if (nw / nh > targetAR) {
-          nh = nw / targetAR;
-        } else {
-          nw = nh * targetAR;
-        }
+
+        // Start with aspect-constrained rect
+        if (nw / nh > targetAR) nh = nw / targetAR;
+        else nw = nh * targetAR;
+
+        // Position fixed anchor (opposite corner stays put)
         if (m.includes('w')) nx = anchorRight - nw;
+        else nx = dragState.startX;
         if (m.includes('n')) ny = anchorBottom - nh;
+        else ny = dragState.startY;
+
+        // Now check each edge against image bounds and if any overflows,
+        // compute the largest size that fits AT this aspect and re-anchor.
+        let maxW = nw, maxH = nh;
+        if (nx < 0)               maxW = Math.min(maxW, anchorRight);
+        if (nx + nw > imgW)       maxW = Math.min(maxW, imgW - dragState.startX);
+        if (ny < 0)               maxH = Math.min(maxH, anchorBottom);
+        if (ny + nh > imgH)       maxH = Math.min(maxH, imgH - dragState.startY);
+        // Collapse to the stricter of the two (preserving 4:3)
+        const fitH = Math.min(maxH, maxW / targetAR);
+        nh = fitH;
+        nw = fitH * targetAR;
+        if (m.includes('w')) nx = anchorRight - nw; else nx = dragState.startX;
+        if (m.includes('n')) ny = anchorBottom - nh; else ny = dragState.startY;
+      } else {
+        // Unlocked: just clamp to image bounds
+        if (nx < 0) { nw += nx; nx = 0; }
+        if (ny < 0) { nh += ny; ny = 0; }
+        if (nx + nw > sourceImage.width)  nw = sourceImage.width  - nx;
+        if (ny + nh > sourceImage.height) nh = sourceImage.height - ny;
       }
     }
-
-    // Clamp to source bounds
-    if (nx < 0) nx = 0;
-    if (ny < 0) ny = 0;
-    if (nx + nw > sourceImage.width) nw = sourceImage.width - nx;
-    if (ny + nh > sourceImage.height) nh = sourceImage.height - ny;
 
     cropRect = { x: nx, y: ny, w: nw, h: nh };
     renderCropOverlay();
@@ -1420,6 +1446,18 @@ function convert() {
       }
     }
 
+    // Content mask: true where the actual scaled image lives; false for the
+    // black letterbox outside. Used by the dither pass so error diffusion
+    // doesn't bleed into / out of the letterbox bars.
+    const contentMask = new Uint8Array(screenWidth * screenHeight);
+    for (let y = 0; y < screenHeight; y++) {
+      for (let x = 0; x < screenWidth; x++) {
+        if (x >= dx && x < dx + dw && y >= dy && y < dy + dh) {
+          contentMask[y * screenWidth + x] = 1;
+        }
+      }
+    }
+
     // Result arrays
     const resultPixels = new Uint8Array(screenWidth * screenHeight * 3);
     let attrs = null;
@@ -1448,17 +1486,35 @@ function convert() {
 
     if (strategy === 'exhaustive' && (currentMode === 'standard' || currentMode === 'ecm')) {
       attrs = new Uint8Array(numAttrCols * numAttrRows);
+      // Threshold-based dither modes need distinct colour pairs to produce a
+      // visible pattern on gradients; otherwise the search picks a single
+      // palette colour that's close to the block's mean and flattens the
+      // dither. We allow ink==paper for uniform blocks (no dither needed).
+      const isThreshold = isThresholdDither(ditherMode);
       for (let by = 0; by < numAttrRows; by++) {
         for (let bx = 0; bx < numAttrCols; bx++) {
           const blockX = bx * bW, blockY = by * bH;
           let bestInk = 0, bestPaper = 0, bestBright = 0, bestError = Infinity;
+
+          // Compute block luma range to decide if block is uniform
+          let lumaMin = Infinity, lumaMax = -Infinity;
+          for (let py = 0; py < bH; py++) {
+            for (let px = 0; px < bW; px++) {
+              const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
+              const L = 0.299*work[idx] + 0.587*work[idx+1] + 0.114*work[idx+2];
+              if (L < lumaMin) lumaMin = L;
+              if (L > lumaMax) lumaMax = L;
+            }
+          }
+          const requireDistinct = isThreshold && (lumaMax - lumaMin) > 15;
 
           if (colorStrategy === 'per-block') {
             for (let bright = 0; bright <= 1; bright++) {
               const pal = modeCfg.palettes[bright];
               for (let ink = 0; ink < 8; ink++) {
                 if (isColorDisabled(currentMode, bright, ink)) continue;
-                for (let paper = ink; paper < 8; paper++) {
+                const paperStart = requireDistinct ? ink + 1 : ink;
+                for (let paper = paperStart; paper < 8; paper++) {
                   if (isColorDisabled(currentMode, bright, paper)) continue;
                   const err = evaluateBlock(work, blockX, blockY, bW, bH,
                                             [pal[ink], pal[paper]], ditherMode);
@@ -1697,12 +1753,13 @@ function convert() {
 
     // Global dither pass: errors propagate across block boundaries.
     // Critical for ECM's 8×1 blocks, where per-block dithering would lose all
-    // vertical error flow.
+    // vertical error flow. Content mask keeps error diffusion inside the
+    // image region so letterbox bars stay clean.
     applyGlobalDither(work, resultPixels, ditherMode, (x, y) => {
       const bx = Math.min(numAttrCols - 1, Math.floor(x / bW));
       const by = Math.min(numAttrRows - 1, Math.floor(y / bH));
       return blockColors[by][bx];
-    });
+    }, contentMask);
 
     convertedPixels = resultPixels;
     convertedAttrs = attrs;
@@ -1862,8 +1919,12 @@ function evaluateBlock(work, bx, by, bw, bh, colors, ditherMode) {
 // getColorsAt(x, y) returns an array of RGB triples [[r,g,b], ...] — the
 // palette available to the block containing pixel (x, y). Array length must
 // be >= 1.
-function applyGlobalDither(work, result, ditherMode, getColorsAt) {
+function applyGlobalDither(work, result, ditherMode, getColorsAt, contentMask) {
   const W = screenWidth, H = screenHeight;
+  // Helper: is this pixel inside content (true everywhere if no mask given)
+  const inContent = contentMask
+    ? (x, y) => contentMask[y * W + x] === 1
+    : () => true;
 
   if (isThresholdDither(ditherMode)) {
     for (let y = 0; y < H; y++) {
@@ -1911,13 +1972,16 @@ function applyGlobalDither(work, result, ditherMode, getColorsAt) {
       result[idx + 1] = chosen[1];
       result[idx + 2] = chosen[2];
 
-      if (kernel) {
+      // Only propagate error if this pixel is inside content — and only to
+      // neighbours that are also inside content. This keeps the letterbox
+      // bars clean.
+      if (kernel && inContent(x, y)) {
         const er = r - chosen[0];
         const eg = g - chosen[1];
         const eb = b - chosen[2];
         for (const [dx, dy, weight] of kernel) {
           const nx = x + dx, ny = y + dy;
-          if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
+          if (nx >= 0 && nx < W && ny >= 0 && ny < H && inContent(nx, ny)) {
             const nIdx = (ny * W + nx) * 3;
             temp[nIdx]     += er * weight;
             temp[nIdx + 1] += eg * weight;
