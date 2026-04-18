@@ -1,6 +1,8 @@
-# Spectrum Image Maker
+# Retro Pixel Converter
 
 A browser-based image converter for classic 8-bit and 16-bit machines. Converts JPG/PNG images to native graphics formats for the ZX Spectrum, Timex/Sinclair 2068, Commodore 64, Atari 800, and Sinclair QL.
+
+_(The GitHub repo is still named `spectrum-image-maker` for URL stability, since the project started as a ZX Spectrum tool and grew from there.)_
 
 **[Try it live →](https://factus10.github.io/spectrum-image-maker/)**
 
