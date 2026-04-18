@@ -1348,15 +1348,24 @@ function convert() {
     srcCtx.fillStyle = '#000';
     srcCtx.fillRect(0, 0, screenWidth, screenHeight);
 
-    // Fit cropped region to target, maintaining aspect ratio
+    // Fit cropped region to target, accounting for the mode's pixel aspect
+    // ratio. The target pixel grid is screenWidth×screenHeight pixels, but on
+    // the real display each target pixel is `aspect` units wide × 1 unit tall.
+    // So we compute the scale in *physical display units* where the crop has
+    // square pixels and the target has rectangular pixels. Without this, a
+    // 4:3 crop gets letterboxed into a wide-pixel mode (e.g. 64-col 8:3
+    // pixel grid), producing narrow content centred with black bars — which
+    // then appears as a portrait rectangle after PAR correction in rendering.
     const cropW = cropRect ? cropRect.w : sourceImage.width;
     const cropH = cropRect ? cropRect.h : sourceImage.height;
     const cropX = cropRect ? cropRect.x : 0;
     const cropY = cropRect ? cropRect.y : 0;
-    const scaleX = screenWidth / cropW;
-    const scaleY = screenHeight / cropH;
-    const scale = Math.min(scaleX, scaleY);
-    const dw = Math.round(cropW * scale);
+    const pxAspect = modeCfg.aspect;
+    const targetDispW = screenWidth * pxAspect; // target width in display units
+    const targetDispH = screenHeight;           // target height in display units
+    const scale = Math.min(targetDispW / cropW, targetDispH / cropH);
+    // Convert back to pixel units: width in pixels = width in display units / pxAspect
+    const dw = Math.round(cropW * scale / pxAspect);
     const dh = Math.round(cropH * scale);
     const dx = Math.round((screenWidth - dw) / 2);
     const dy = Math.round((screenHeight - dh) / 2);
