@@ -42,8 +42,9 @@ Error-diffusion dithers propagate across block boundaries globally (critical for
 
 ## Color search strategies
 
-- **Per-block best-fit** — try all N-combinations of palette colors per block, score each by actually running the chosen dither and measuring pixel error. Highest quality but slowest (ZX, TS 2068 ECM, C64).
-- **Weighted average pair fit** (contributed by Josef Jelinek) — for each candidate ink/paper pair, find the blend ratio of the two whose result is closest to the block's average color; pick the pair whose best blend matches best. Visually comparable to per-block best-fit but ~10× faster by skipping the explicit dither-and-measure step. Strong default for ZX Spectrum / ECM on large images.
+- **Weighted average pair fit** (default, contributed by Josef Jelinek) — for each candidate ink/paper pair, find the blend ratio whose result is closest to the block's average color, then pick the pair whose best blend matches best. Skips the expensive dither-and-measure step while still picking excellent pairs. Josef's own evaluation:
+  > For colorful pictures, in normal mode, it's neck-and-neck with per-block best-fit. For grayscale, it produces much better results. All this while being 5–10× faster. In TS 2068 high-color (ECM) mode, there is no comparison — the per-block best-fit is mostly broken there, and WAPF wins cleanly.
+- **Per-block best-fit** — try all N-combinations of palette colors per block, score each by actually running the chosen dither and measuring per-pixel error. Highest-effort search, sometimes preferred for colorful images in standard ZX mode — but not recommended for ECM (see above).
 - **Global pre-quantize** — frequency-based counting for modes where exhaustive is infeasible (Atari GR.15 picks 4 of 128), or as a fast fallback on other modes. Can produce minor artifacts on gradients.
 - **Pixel-direct** — 1×1 blocks with no search; dither each pixel to the full palette (QL, Atari GR.9).
 - **User-picked** — monochrome and hardware-constrained modes (TS 2068 64-col, Atari GR.8).
