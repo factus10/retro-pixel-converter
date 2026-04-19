@@ -2200,6 +2200,94 @@ function convert() {
       return blockColors[by][bx];
     }, contentMask, { serpentine });
 
+    // --- Gauss-Seidel refinement pass ---
+    // After the initial WAPF+dither pass, measure per-block output error and
+    // re-run a small candidate search on blocks that are the worst offenders.
+    // Uses the initial choice as seed and only evaluates nearby candidates.
+    // Only applied to exhaustive standard/ecm modes where a block has two
+    // independent palette colors (not C64 auto-bg or global-prequant).
+    let gsUpgraded = 0, gsIters = 0;
+    if (gaussSeidel && strategy === 'exhaustive' &&
+        (currentMode === 'standard' || currentMode === 'ecm') &&
+        attrs) {
+      // Compute per-block error for current output
+      const blockErr = new Float64Array(numAttrRows * numAttrCols);
+      const recomputeBlockErr = (by, bx) => {
+        let sum = 0;
+        const blockX = bx * bW, blockY = by * bH;
+        for (let py = 0; py < bH; py++) {
+          for (let px = 0; px < bW; px++) {
+            const idx = ((blockY + py) * screenWidth + (blockX + px)) * 3;
+            const dr = work[idx]   - resultPixels[idx];
+            const dg = work[idx+1] - resultPixels[idx+1];
+            const db = work[idx+2] - resultPixels[idx+2];
+            sum += 3*dr*dr + 4*dg*dg + 2*db*db;
+          }
+        }
+        blockErr[by * numAttrCols + bx] = sum;
+      };
+      for (let by = 0; by < numAttrRows; by++) {
+        for (let bx = 0; bx < numAttrCols; bx++) recomputeBlockErr(by, bx);
+      }
+      // Threshold: top-quartile by error (block is "hard")
+      const sorted = Array.from(blockErr).sort((a,b) => a - b);
+      const threshold = sorted[Math.floor(sorted.length * 0.75)] || 0;
+
+      for (let iter = 0; iter < 3; iter++) {
+        let changed = 0;
+        for (let by = 0; by < numAttrRows; by++) {
+          for (let bx = 0; bx < numAttrCols; bx++) {
+            if (blockErr[by * numAttrCols + bx] <= threshold) continue;
+            const blockX = bx * bW, blockY = by * bH;
+            // Candidate pool: existing pair + its "neighbors" (other single-
+            // palette swaps against the 8 colors in each palette).
+            const [curInk, curPaper] = blockIndices[by][bx];
+            const curAttr = attrs[by * numAttrCols + bx];
+            const curBright = (curAttr >> 6) & 1;
+            let bestErr = evaluateBlock(blockWork, blockX, blockY, bW, bH,
+              [modeCfg.palettes[curBright][curInk], modeCfg.palettes[curBright][curPaper]], ditherMode);
+            let bestInk = curInk, bestPaper = curPaper, bestBright = curBright;
+            const cands = [];
+            // Vary one side at a time, within same bright
+            for (let c = 0; c < 8; c++) {
+              if (c !== curPaper) cands.push([curBright, c, curPaper]);
+              if (c !== curInk) cands.push([curBright, curInk, c]);
+            }
+            // Also try flipping bright
+            for (let c = 0; c < 8; c++) cands.push([curBright ^ 1, c, curPaper]);
+            for (const [tb, ti, tp] of cands) {
+              if (isColorDisabled(currentMode, tb, ti) || isColorDisabled(currentMode, tb, tp)) continue;
+              const pal = modeCfg.palettes[tb];
+              const err = evaluateBlock(blockWork, blockX, blockY, bW, bH, [pal[ti], pal[tp]], ditherMode);
+              if (err < bestErr) { bestErr = err; bestInk = ti; bestPaper = tp; bestBright = tb; }
+            }
+            if (bestInk !== curInk || bestPaper !== curPaper || bestBright !== curBright) {
+              const pal = modeCfg.palettes[bestBright];
+              blockColors[by][bx] = [pal[bestInk], pal[bestPaper]];
+              blockIndices[by][bx] = [bestInk, bestPaper];
+              attrs[by * numAttrCols + bx] = (bestBright << 6) | (bestPaper << 3) | bestInk;
+              changed++;
+            }
+          }
+        }
+        gsIters = iter + 1;
+        if (changed === 0) break;
+        gsUpgraded += changed;
+        // Re-run global dither with updated colors
+        applyGlobalDither(work, resultPixels, ditherMode, (x, y) => {
+          const bx = Math.min(numAttrCols - 1, Math.floor(x / bW));
+          const by = Math.min(numAttrRows - 1, Math.floor(y / bH));
+          return blockColors[by][bx];
+        }, contentMask, { serpentine });
+        // Recompute per-block error for next iteration
+        for (let by = 0; by < numAttrRows; by++) {
+          for (let bx = 0; bx < numAttrCols; bx++) recomputeBlockErr(by, bx);
+        }
+      }
+      modeMeta.gsIters = gsIters;
+      modeMeta.gsUpgraded = gsUpgraded;
+    }
+
     // Restore modeCfg.palettes — we only swapped in linearized copies for the
     // dither pass, not for the app's persistent config.
     modeCfg.palettes = origPalettes;
@@ -2279,7 +2367,9 @@ function convert() {
     renderConvertedPreview(resultPixels);
 
     const elapsed = (performance.now() - t0).toFixed(0);
-    statusText.textContent = `Converted in ${elapsed}ms (${currentMode})`;
+    let extra = '';
+    if (modeMeta.gsIters) extra = ` — GS ${modeMeta.gsIters} iter(s), ${modeMeta.gsUpgraded} block(s) upgraded`;
+    statusText.textContent = `Converted in ${elapsed}ms (${currentMode})${extra}`;
     statusSize.textContent = `${scrBytes.length} bytes`;
 
     // Enable export buttons
