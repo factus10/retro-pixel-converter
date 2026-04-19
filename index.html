@@ -1440,12 +1440,141 @@ function loadImage(file) {
       statusText.textContent = `Loaded: ${img.width}x${img.height}`;
       dropZone.classList.add('hidden');
       previewArea.classList.add('visible');
+      // Fresh image: clear user-override flags, analyze, then apply recommendation.
+      userOverride.ditherMode = false;
+      userOverride.colorStrategy = false;
+      lastImageAnalysis = analyzeImage(img);
+      applyRecommendation();
       renderCropOverlay();
       convert();
     };
     img.src = e.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+// --- Image analysis + auto recommendation ---
+let lastImageAnalysis = null;
+const userOverride = { ditherMode: false, colorStrategy: false };
+
+function analyzeImage(img) {
+  const MAX = 256;
+  const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.drawImage(img, 0, 0, w, h);
+  let data;
+  try { data = ctx.getImageData(0, 0, w, h).data; }
+  catch (_) { return { sat: 0.5, luma: 128, uniqueApprox: 4096, edge: 0.1, klass: 'photo' }; }
+  const stride = 4; // pixel stride
+  let satSum = 0, lumaSum = 0, n = 0;
+  const bins = new Set();
+  for (let y = 0; y < h; y += stride) {
+    for (let x = 0; x < w; x += stride) {
+      const i = (y * w + x) * 4;
+      const r = data[i], g = data[i+1], b = data[i+2];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      satSum += (mx - mn) / 255;
+      lumaSum += 0.299 * r + 0.587 * g + 0.114 * b;
+      const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4); // 4-bit/channel histogram
+      bins.add(key);
+      n++;
+    }
+  }
+  // Edge density: absolute luma gradient across adjacent sampled pixels
+  let edgeSum = 0, edgeN = 0;
+  for (let y = 0; y < h; y += stride) {
+    for (let x = 0; x < w - stride; x += stride) {
+      const i1 = (y * w + x) * 4;
+      const i2 = (y * w + x + stride) * 4;
+      const l1 = 0.299*data[i1] + 0.587*data[i1+1] + 0.114*data[i1+2];
+      const l2 = 0.299*data[i2] + 0.587*data[i2+1] + 0.114*data[i2+2];
+      edgeSum += Math.abs(l1 - l2) / 255;
+      edgeN++;
+    }
+  }
+  for (let y = 0; y < h - stride; y += stride) {
+    for (let x = 0; x < w; x += stride) {
+      const i1 = (y * w + x) * 4;
+      const i2 = ((y + stride) * w + x) * 4;
+      const l1 = 0.299*data[i1] + 0.587*data[i1+1] + 0.114*data[i1+2];
+      const l2 = 0.299*data[i2] + 0.587*data[i2+1] + 0.114*data[i2+2];
+      edgeSum += Math.abs(l1 - l2) / 255;
+      edgeN++;
+    }
+  }
+  const sat = n ? satSum / n : 0;
+  const luma = n ? lumaSum / n : 128;
+  const uniqueApprox = bins.size;
+  const edge = edgeN ? edgeSum / edgeN : 0;
+  let klass = 'photo';
+  if (sat < 0.12) klass = 'gray';
+  else if (edge > 0.3 && uniqueApprox < 60) klass = 'lineart';
+  return { sat, luma, uniqueApprox, edge, klass };
+}
+
+function classLabel(k) {
+  if (k === 'gray') return 'grayscale';
+  if (k === 'lineart') return 'line art / high contrast';
+  return 'photographic colour';
+}
+
+function ditherLabel(v) {
+  const opt = document.querySelector(`#ditherMode option[value="${v}"]`);
+  return opt ? opt.textContent : v;
+}
+function strategyLabel(v) {
+  const opt = document.querySelector(`#colorStrategy option[value="${v}"]`);
+  return opt ? opt.textContent : v;
+}
+
+function recommendSettings(analysis, mode) {
+  // Defaults from the classification table
+  let dither = 'floyd-steinberg';
+  let strategy = 'weighted-average';
+  if (analysis) {
+    if (analysis.klass === 'lineart') {
+      dither = 'ordered8';
+      strategy = 'weighted-average';
+    } else {
+      dither = 'floyd-steinberg';
+      strategy = 'weighted-average';
+    }
+  }
+  // Mode-specific overrides
+  const monoModes = new Set(['hires', 'atari-gr8']);
+  const pixelDirect = new Set(['atari-gr9', 'ql-mode8', 'ql-mode4']);
+  const globalPrequant = new Set(['atari-gr15']);
+  const c64Modes = new Set(['c64-hires', 'c64-koala']);
+  if (monoModes.has(mode) || pixelDirect.has(mode) || globalPrequant.has(mode) || c64Modes.has(mode)) {
+    dither = 'floyd-steinberg';
+    strategy = 'weighted-average';
+  }
+  return { dither, strategy };
+}
+
+function updateAutoBadge(rec, analysis) {
+  const badge = document.getElementById('autoBadge');
+  const txt = document.getElementById('autoBadgeText');
+  const det = document.getElementById('autoBadgeDetect');
+  if (!badge || !txt) return;
+  if (!rec || !analysis) { badge.style.display = 'none'; return; }
+  badge.style.display = '';
+  txt.textContent = ` ${ditherLabel(rec.dither)} + ${strategyLabel(rec.strategy)}`;
+  det.textContent = `detected: ${classLabel(analysis.klass)}`;
+}
+
+function applyRecommendation() {
+  if (!lastImageAnalysis) return;
+  const mode = $('displayMode').value;
+  const rec = recommendSettings(lastImageAnalysis, mode);
+  updateAutoBadge(rec, lastImageAnalysis);
+  // Respect user overrides — only set the control if the user hasn't changed it.
+  if (!userOverride.ditherMode) $('ditherMode').value = rec.dither;
+  if (!userOverride.colorStrategy) $('colorStrategy').value = rec.strategy;
 }
 
 // --- Crop overlay rendering ---
@@ -1674,8 +1803,14 @@ for (const id of ['displayMode', 'ditherMode', 'colorStrategy', 'hiresPair', 'in
       currentMode = $('displayMode').value;
       updateModeUI();
       initPaletteStrip();
+      // Re-apply auto recommendation for the new mode (respects user overrides).
+      if (lastImageAnalysis) applyRecommendation();
     } else if (id === 'atariHue') {
       initPaletteStrip();
+    } else if (id === 'ditherMode') {
+      userOverride.ditherMode = true;
+    } else if (id === 'colorStrategy') {
+      userOverride.colorStrategy = true;
     }
     if (sourceImage) {
       if (['brightness','contrast','saturation','gamma'].includes(id)) renderCropOverlay();
