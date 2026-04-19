@@ -1061,6 +1061,31 @@ function blendFactor(r, g, b, c0, c1, mode) {
   return total > 0 ? d0 / total : 0.5;
 }
 
+// Yliluoma-lite for N>2 blocks: find the two palette entries closest to the
+// target pixel and treat them as a pair. Use projection onto their line to
+// get a blend factor, then apply the dither threshold.
+// Returns the chosen RGB triple from `colors`.
+function yliluomaLiteChoose(r, g, b, colors, mode, threshold) {
+  // Find two nearest palette colors
+  let i0 = 0, i1 = 1, d0 = Infinity, d1 = Infinity;
+  for (let i = 0; i < colors.length; i++) {
+    const d = colorDist([r, g, b], colors[i]);
+    if (d < d0) { d1 = d0; i1 = i0; d0 = d; i0 = i; }
+    else if (d < d1) { d1 = d; i1 = i; }
+  }
+  const c0 = colors[i0], c1 = colors[i1];
+  // Projection blend factor (same math as Yliluoma N=2 path)
+  const dr = c1[0] - c0[0], dg = c1[1] - c0[1], db = c1[2] - c0[2];
+  const denom = dr * dr + dg * dg + db * db;
+  let t;
+  if (denom < 1e-6) t = 0;
+  else {
+    t = ((r - c0[0]) * dr + (g - c0[1]) * dg + (b - c0[2]) * db) / denom;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+  }
+  return t > threshold ? c1 : c0;
+}
+
 // --- Display modes ---
 // Generalized mode config (extensible to other machines like QL or C64):
 //   w, h            — screen resolution in source pixels
@@ -2300,16 +2325,18 @@ function evaluateBlock(work, bx, by, bw, bh, colors, ditherMode) {
         }
       }
     } else {
-      // N > 2: bias pixel by threshold, then pick nearest
+      // N > 2: Yliluoma-lite — project onto the two nearest palette entries
+      // and apply threshold. Principled fallback beats nearest-with-bias on
+      // gradients in C64 Koala / Atari GR.15 blocks.
       for (let py = 0; py < bh; py++) {
         for (let px = 0; px < bw; px++) {
           const idx = ((by + py) * screenWidth + (bx + px)) * 3;
           const r = Math.max(0, Math.min(255, work[idx]));
           const g = Math.max(0, Math.min(255, work[idx+1]));
           const b = Math.max(0, Math.min(255, work[idx+2]));
-          const bias = (getThreshold(ditherMode, bx + px, by + py) - 0.5) * 40;
-          const ci = quantizeNearest(r + bias, g + bias, b + bias, colors);
-          totalError += colorDist([r, g, b], colors[ci]);
+          const threshold = getThreshold(ditherMode, bx + px, by + py);
+          const chosen = yliluomaLiteChoose(r, g, b, colors, ditherMode, threshold);
+          totalError += colorDist([r, g, b], chosen);
         }
       }
     }
@@ -2387,14 +2414,13 @@ function applyGlobalDither(work, result, ditherMode, getColorsAt, contentMask, o
         const colors = getColorsAt(x, y);
 
         let chosen;
+        const threshold = getThreshold(ditherMode, x, y);
         if (colors.length === 2) {
           const factor = blendFactor(r, g, b, colors[0], colors[1], ditherMode);
-          const threshold = getThreshold(ditherMode, x, y);
           chosen = factor > threshold ? colors[1] : colors[0];
         } else {
-          const bias = (getThreshold(ditherMode, x, y) - 0.5) * 40;
-          const ci = quantizeNearest(r + bias, g + bias, b + bias, colors);
-          chosen = colors[ci];
+          // N > 2: Yliluoma-lite — two-nearest projection + threshold.
+          chosen = yliluomaLiteChoose(r, g, b, colors, ditherMode, threshold);
         }
         result[idx]     = chosen[0];
         result[idx + 1] = chosen[1];
