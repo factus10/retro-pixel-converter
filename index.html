@@ -1999,23 +1999,104 @@ function convert() {
       }
       attrs = null;
     } else if (strategy === 'global-prequantize') {
+      // K-means++ over the blurred working pixels (stride 4 for speed).
+      // After convergence, map each centroid to its nearest palette color
+      // via quantizeNearest and dedupe. This replaces the old top-frequency
+      // nearest-bin approach — k-means fits the image's actual color
+      // distribution far better, especially for e.g. skies + skin tones.
       const pal = modeCfg.palettes[0];
-      const counts = new Uint32Array(pal.length);
-      for (let y = 0; y < screenHeight; y++) {
-        for (let x = 0; x < screenWidth; x++) {
+      const K = modeCfg.colorsPerBlock;
+
+      // Sample pixels (stride 4)
+      const samples = [];
+      for (let y = 0; y < screenHeight; y += 4) {
+        for (let x = 0; x < screenWidth; x += 4) {
           const idx = (y * screenWidth + x) * 3;
-          const r = Math.max(0, Math.min(255, blockWork[idx]));
-          const g = Math.max(0, Math.min(255, blockWork[idx+1]));
-          const b = Math.max(0, Math.min(255, blockWork[idx+2]));
-          counts[quantizeNearest(r, g, b, pal)]++;
+          samples.push([
+            Math.max(0, Math.min(255, blockWork[idx])),
+            Math.max(0, Math.min(255, blockWork[idx+1])),
+            Math.max(0, Math.min(255, blockWork[idx+2])),
+          ]);
         }
       }
-      const entries = [];
-      for (let i = 0; i < pal.length; i++) if (counts[i] > 0) entries.push([i, counts[i]]);
-      entries.sort((a, b) => b[1] - a[1]);
+
+      // K-means++ seeding
+      const centroids = [];
+      if (samples.length > 0) {
+        centroids.push(samples[(Math.random() * samples.length) | 0].slice());
+        const dists = new Float64Array(samples.length);
+        for (let c = 1; c < K; c++) {
+          let sum = 0;
+          for (let i = 0; i < samples.length; i++) {
+            let md = Infinity;
+            for (const cc of centroids) {
+              const d = colorDist(samples[i], cc);
+              if (d < md) md = d;
+            }
+            dists[i] = md;
+            sum += md;
+          }
+          let pick = Math.random() * sum;
+          let chosen = samples.length - 1;
+          for (let i = 0; i < samples.length; i++) {
+            pick -= dists[i];
+            if (pick <= 0) { chosen = i; break; }
+          }
+          centroids.push(samples[chosen].slice());
+        }
+      }
+      while (centroids.length < K) centroids.push([0, 0, 0]);
+
+      // Lloyd iterations
+      for (let iter = 0; iter < 15; iter++) {
+        const sums = Array.from({ length: K }, () => [0, 0, 0, 0]); // r,g,b,count
+        for (const p of samples) {
+          let bestK = 0, bestD = Infinity;
+          for (let k = 0; k < K; k++) {
+            const d = colorDist(p, centroids[k]);
+            if (d < bestD) { bestD = d; bestK = k; }
+          }
+          sums[bestK][0] += p[0];
+          sums[bestK][1] += p[1];
+          sums[bestK][2] += p[2];
+          sums[bestK][3] += 1;
+        }
+        let maxDelta = 0;
+        for (let k = 0; k < K; k++) {
+          if (sums[k][3] === 0) continue;
+          const nr = sums[k][0] / sums[k][3];
+          const ng = sums[k][1] / sums[k][3];
+          const nb = sums[k][2] / sums[k][3];
+          const dr = nr - centroids[k][0], dg = ng - centroids[k][1], db = nb - centroids[k][2];
+          const d = Math.sqrt(dr*dr + dg*dg + db*db);
+          if (d > maxDelta) maxDelta = d;
+          centroids[k][0] = nr; centroids[k][1] = ng; centroids[k][2] = nb;
+        }
+        if (maxDelta < 0.5) break;
+      }
+
+      // Map centroids -> palette indices (dedupe, keep first occurrences)
       const chosenIndices = [];
-      for (let i = 0; i < modeCfg.colorsPerBlock && i < entries.length; i++) chosenIndices.push(entries[i][0]);
-      while (chosenIndices.length < modeCfg.colorsPerBlock) chosenIndices.push(0);
+      const seen = new Set();
+      for (const c of centroids) {
+        const pi = quantizeNearest(c[0], c[1], c[2], pal);
+        if (!seen.has(pi)) { seen.add(pi); chosenIndices.push(pi); }
+      }
+      // Top-up: if dedupe shrank the set, fill with nearest distinct
+      // palette colors to the abandoned centroids.
+      for (const c of centroids) {
+        if (chosenIndices.length >= K) break;
+        // Find nearest palette entry not yet chosen
+        let best = -1, bestD = Infinity;
+        for (let i = 0; i < pal.length; i++) {
+          if (seen.has(i)) continue;
+          const d = colorDist(c, pal[i]);
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        if (best >= 0) { seen.add(best); chosenIndices.push(best); }
+      }
+      while (chosenIndices.length < K) chosenIndices.push(0);
+
       const chosenRGB = chosenIndices.map(i => pal[i]);
       blockColors[0][0] = chosenRGB;
       blockIndices[0][0] = chosenIndices;
