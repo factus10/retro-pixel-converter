@@ -4,8 +4,6 @@ A browser-based image converter for classic 8-bit and 16-bit machines. Converts 
 
 **[Try it live →](https://factus10.github.io/retro-pixel-converter/)**
 
-_(Originally started as a ZX Spectrum-only tool under the name `spectrum-image-maker`. The old GitHub URL still redirects.)_
-
 ## Supported display modes
 
 | Machine | Mode | Resolution | Attributes | Colors | File |
