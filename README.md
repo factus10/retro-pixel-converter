@@ -1,6 +1,6 @@
 # Retro Pixel Converter
 
-A dependency-free browser image converter for classic 8-bit and 16-bit machines. It converts JPG/PNG images into native graphics formats for the ZX81, ZX Spectrum, Timex/Sinclair 2068, Commodore 64, Atari 800, Sinclair QL, and Pico-8.
+A dependency-free browser image converter for classic 8-bit and 16-bit machines. It converts JPG, PNG, GIF, and WebP images into native graphics formats for the ZX81, ZX Spectrum, Timex/Sinclair 2068, Commodore 64, Atari 800, Sinclair QL, SAM Coupé, and Pico-8.
 
 **[Try it live ->](https://factus10.github.io/retro-pixel-converter/)**
 
@@ -15,7 +15,7 @@ A dependency-free browser image converter for classic 8-bit and 16-bit machines.
 | TS 2068 | 64-column hi-res | 512x192 | global | 8 hardware ink/paper pairs | 64/64/24/24 | `.scr` / `.tap` |
 | ZX Spectrum / TS 2068 | Mono | 256x192 | global | 2 of 8 user-picked ink/paper, no bright | 32/32/24/24 | `.scr` / `.tap` |
 | C64 | Hi-res bitmap NTSC/PAL | 320x200 | 8x8 | 2 of 16 | mode-specific | `.prg` |
-| C64 | Multicolor / Koala NTSC/PAL | 160x200 | 4x8 | 4 of 16 + auto global background | mode-specific | `.kla` |
+| C64 | Multicolor / Koala NTSC/PAL | 160x200 | 4x8 | 1 auto-picked global background + 3 of 16 per block (4 total) | mode-specific | `.kla` |
 | Atari 800 | GR.15 / ANTIC E | 160x192 | global | 4 of 128 | 8/8/24/24 | `.mic` |
 | Atari 800 | GR.8 | 320x192 | global | 2 user-picked hue/luma colors | 16/16/24/24 | `.gr8` |
 | Atari 800 | GR.9 | 80x192 | per-pixel | 16 luma shades of one hue | 4/4/24/24 | `.gr9` |
@@ -44,14 +44,16 @@ Custom modes can also be imported from JSON at runtime. PNG/JPG export works for
 ## Workflow Features
 
 - Drag-and-drop or browse for an image, then crop interactively in the input panel.
+- Leave `Autodetect` enabled to classify the source as grayscale, line art, or a photo and apply mode-aware dithering and color-search recommendations. Manual changes to either recommended control are respected; the toggle is enabled by default and its state persists locally.
 - Resize the input/output split manually with the center divider.
 - Lock crop aspect ratio, stretch the selected crop to the target resolution, or turn Stretch off and fill side bars with the configured RGB crop fill color. Filled bars are part of the target image and can be dithered like any other pixels.
-- Use brightness, contrast, saturation, gamma, dithering, palette, and search controls to tune the conversion.
+- Use brightness, contrast, saturation, gamma, dithering, palette, and search controls to tune the conversion. Input brightness uses a signed-quadratic response for fine adjustment near the neutral value of 50 while retaining the full effect at 0 and 100.
+- Reset any input-image adjustment to its default with the icon beside its slider.
 - Inspect available colors with the mode-aware palette strip and disable individual colors for palette-search modes when needed.
 - For Atari GR.8, choose foreground/background Atari hues and luma values directly; the palette strip is hidden because conversion uses those two selected colors.
 - Show an attribute grid overlay for block-based modes.
 - Snapshot the current output and switch the output panel between `Active` and `Saved` using the header radio toggle. The saved snapshot reuses the normal output canvas, CRT, border, scale, grid, and fullscreen paths.
-- Export/import profiles containing current controls, crop state, disabled colors, crop fill color, CRT settings, and border selection.
+- Export/import conversion profiles containing the selected mode, conversion controls, crop state, disabled colors, crop fill color, CRT settings, and border selection. App-level UI preferences such as `Autodetect` and ECM `.TAP` block ordering are not part of a profile.
 
 ## CRT, Borders, And Output Display
 
@@ -59,17 +61,17 @@ The output panel uses a `Scale` control, mode-specific pre-scaling where require
 
 The border selector is available in the output header for modes with visible borders. The app starts with Scale `1.5` and a black border selected. Border selection persists when switching through borderless modes such as QL.
 
-Fullscreen output renders the selected `Active` or `Saved` image with devicePixelRatio-aware backing resolution. The decorative CRT frame is not shown in fullscreen, but any enabled border remains because it is rendered inside the output canvas.
+The input-panel fullscreen button shows the current adjusted and cropped source image. Fullscreen output renders the selected `Active` or `Saved` image with devicePixelRatio-aware backing resolution. The decorative CRT frame is not shown in fullscreen, but any enabled border remains because it is rendered inside the output canvas.
 
 ## Dithering And Color Search
 
-Dithering options include Floyd-Steinberg, Atkinson, Stucki, Jarvis-Judice-Ninke, Burkes, Sierra Lite, Sierra Line, Dizzy, Hilbert diffusion, Hilbert Riemersma, Adaptive Riemersma, Blue noise, Bayer 4x4, Bayer 8x8, halftone, and no dither. Sierra Line sends error only to the next row with symmetric 1/4, 2/4, 1/4 weights, using 2/4, 2/4 at the left and right edges; pixel order within a row and serpentine scanning therefore do not affect it. Interlaced processing is an application strategy rather than a separate dither method. In direct-pixel modes, an `Interlaced` switch is available for scanline error-diffusion and threshold dithers. Scanline methods use the same even-then-odd flow as interlaced attributes. Threshold methods render even rows first and spread their actual quantization error into the odd rows immediately above and below with a symmetric Sierra Line fan. Each adjacent row receives half the fan when both exist, or the full fan at the top and bottom edges, so the total distributed error remains one. Odd rows are rendered after all even rows and do not propagate error further. Dizzy uses a deterministic shuffled pixel order per resolution and spreads error to unvisited adjacent neighbors with lower diagonal weight. Hilbert Riemersma follows a Hilbert curve and adds a 16-entry exponentially weighted recent-error history before quantization. Adaptive Riemersma builds an image-dependent space-filling curve by merging 2x2 pixel loops by color-distance delta, then uses the same recent-error history. Blue noise uses a generated 64x64 toroidal rank map with seamless wrapped edges, avoiding the hard tile boundaries of independently shifted tiles. Two-color ordered and threshold dithers project pixels onto the selected color segment in linear RGB before thresholding. This is the Yliluoma-like part of the old ordered workflow, so a separate Yliluoma option would only duplicate Bayer 4x4 with the same two-color projection.
+Dithering options include Floyd-Steinberg, Atkinson, Stucki, Jarvis-Judice-Ninke, Burkes, Sierra Lite, Sierra Line, Dizzy, Hilbert diffusion, Hilbert Riemersma, Adaptive Riemersma, Blue noise, Bayer 4x4, even-lines-first and odd-lines-first Bayer 4x4, Bayer 8x8, halftone, and no dither. The line-first Bayer variants preserve Bayer's relative ordering within each scanline parity, but assign threshold ranks 0-7 to even lines and 8-15 to odd lines, or the complementary odd-first ordering. At 50% coverage this fills one line parity completely before the other. Sierra Line sends error only to the next row with symmetric 1/4, 2/4, 1/4 weights, using 2/4, 2/4 at the left and right edges; pixel order within a row and serpentine scanning therefore do not affect it. Interlaced processing is an application strategy rather than a separate dither method. In direct-pixel modes, an `Interlaced` switch is available for scanline error-diffusion and threshold dithers and uses an even-then-odd flow. Its threshold path spreads each even row's actual quantization error into the odd rows immediately above and below with a symmetric Sierra Line fan. Each adjacent row receives half the fan when both exist, or the full fan at the top and bottom edges, so the total distributed error remains one. Odd rows are rendered after all even rows and do not propagate error further. Attribute modes provide separately selectable even-first and odd-first strategies as described below. Dizzy uses a deterministic shuffled pixel order per resolution and spreads error to unvisited adjacent neighbors with lower diagonal weight. Hilbert Riemersma follows a Hilbert curve and adds a 16-entry exponentially weighted recent-error history before quantization. Adaptive Riemersma builds an image-dependent space-filling curve by merging 2x2 pixel loops by color-distance delta, then uses the same recent-error history. Blue noise uses a generated 64x64 toroidal rank map with seamless wrapped edges, avoiding the hard tile boundaries of independently shifted tiles. Two-color ordered and threshold dithers project pixels onto the selected color segment in linear RGB before thresholding. This is the Yliluoma-like part of the old ordered workflow, so a separate Yliluoma option would only duplicate Bayer 4x4 with the same two-color projection.
 
 Color search strategies are mode-aware:
 
 - **Best segment coverage** is the default for two-color attribute modes such as ZX/Timex and C64 hi-res. It scores candidate attribute pairs by projecting each original block pixel onto the ink-paper line segment in linear RGB and choosing the pair with the lowest coverage error.
 - **Best simplex coverage** is the default for C64 multicolor modes. It scores each four-color candidate set by how well its linear RGB convex hull covers the original block.
-- **Interlaced segment coverage** is available for 8x1 two-color attribute modes such as Timex ECM and SAM mode 2 with a scanline error-diffusion or threshold dither. Selecting this color strategy automatically applies the corresponding dither in two phases: even rows choose segment-fit attributes and render first while odd rows collect their error, then odd rows choose attributes from their error-adjusted pixels and render. With scanline diffusion, odd-row error aimed at already rendered even rows is discarded, while two-row kernels such as Stucki and Jarvis-Judice-Ninke can still carry it to the next odd row. With a threshold dither, odd-row errors are not propagated.
+- **Interlaced segment coverage (even first / odd first)** is available for 8x1 two-color attribute modes such as Timex ECM and SAM mode 2 with a scanline error-diffusion or threshold dither. The selected first parity chooses segment-fit attributes and renders while the other parity collects its error; the second parity then chooses attributes from its error-adjusted pixels and renders. Scanline diffusion preserves each dither's forward kernel, so first-parity error feeds following rows and two-row kernels such as Stucki and Jarvis-Judice-Ninke can also carry error within a parity. During the second phase, error aimed at finalized first-parity rows is discarded. Threshold dithers instead spread first-parity error symmetrically to available adjacent rows, and the second parity does not propagate error further.
 - **Weighted average pair fit** scores candidate color pairs by how well a blend can match the block average; ZX/Timex attribute modes use linear RGB for this scoring to match their final pixel decisions.
 - **Per-block best-fit** exhaustively evaluates palette combinations for block modes where that is practical.
 - **Greedy global hull** is used for Atari GR.15 and SAM mode 3: it adds four global palette colors by reducing convex-hull coverage error, then runs a small swap refinement.
@@ -111,7 +113,7 @@ Pico-8 also uses an output pre-scale of `2` before output effects, so CRT-style 
 
 ## Export Formats
 
-Image export produces sharp PNG/JPG files at 1x, 2x, or 4x with the active conversion's pixel aspect correction. PNG/JPG export reuses a WebGL2 export renderer instead of allocating a new context for each download. Binary export data is built lazily when a download is requested, so routine preview updates do not rebuild `.scr`, `.tap`, `.prg`, `.kla`, and other binary payloads.
+Image export produces sharp PNG/JPG files at 1x, 2x, or 4x with integer pixel replication approximating the active conversion's pixel aspect ratio. The selected scale is the replication count on the shorter pixel axis; the other axis uses the closest proportional integer count, capped at a 4:1 ratio. For example, 2:1 pixels export as 2x1, 4x2, and 8x4 blocks, while a 1.5:1 aspect exports as 2x1, 3x2, and 6x4 blocks. A 1:2 aspect similarly uses 1x2, 2x4, and 4x8 blocks. This keeps every converted pixel aligned to a uniform rectangle instead of rounding fractional output boundaries. PNG/JPG export reuses a WebGL2 export renderer instead of allocating a new context for each download. JPG encoding remains lossy even though its pre-encoding pixel geometry is exact. Binary export data is built lazily when a download is requested, so routine preview updates do not rebuild `.scr`, `.tap`, `.prg`, `.kla`, and other binary payloads.
 
 | Format | Output |
 |---|---|
@@ -131,13 +133,13 @@ Image export produces sharp PNG/JPG files at 1x, 2x, or 4x with the active conve
 | SAM Coupé Mode 4 | `.ss4`, 24576 bytes screen + 41 bytes palette = 24617 bytes |
 | Pico-8 | `.bin` and optional hex `.txt` |
 
-ZX/Timex modes additionally support `.tap` tape-image export with correctly addressed CODE blocks.
+ZX/Timex modes additionally support `.tap` tape-image export with correctly addressed CODE blocks. For ECM, the `Attributes first in .TAP` switch emits the separately addressed attribute block before the bitmap block, allowing ECMview to paint the image without temporary attribute artifacts while loading.
 
 ## Hardware Notes
 
 ZX81: `.zx8` is a raw 32x24 row-major character-code screen using normal codes `0..63` and inverse-video codes `128..191`.
 
-ZX/Timex: the `.tap` export includes CODE blocks at the correct addresses. For ECM/64-column modes, set the video mode first (`OUT 255,2` for ECM, `OUT 255,6+(ink<<3)` for 64-column) before loading.
+ZX/Timex: the `.tap` export includes CODE blocks at the correct addresses. ECM can optionally place its attribute block first for artifact-free painting in ECMview. For ECM/64-column modes, set the video mode first (`OUT 255,2` for ECM, `OUT 255,6+(ink<<3)` for 64-column) before loading.
 
 C64: `.prg` and `.kla` files use standard bitmap/Koala-style layouts and can be loaded by compatible viewers or tools.
 

@@ -174,6 +174,28 @@ input[type="range"]::-webkit-slider-thumb {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
+.range-with-reset {
+  grid-template-columns: minmax(0, 1fr) auto 24px;
+}
+.range-with-reset input {
+  grid-column: 1 / span 2;
+}
+.range-with-reset .range-reset {
+  grid-column: 3;
+  grid-row: 2;
+  align-self: center;
+  width: 24px;
+  height: 24px;
+  padding: 3px;
+  color: var(--text-dim);
+}
+.range-with-reset .range-reset:hover:not(:disabled) {
+  color: var(--accent2);
+}
+.range-with-reset .range-reset svg {
+  width: 16px;
+  height: 16px;
+}
 
 .switch {
   display: inline-flex;
@@ -960,6 +982,8 @@ svg {
         <option value="adaptive-riemersma">Adaptive Riemersma</option>
         <option value="blue-noise">Blue noise</option>
         <option value="ordered-bayer-4x4">Ordered (Bayer 4×4)</option>
+        <option value="ordered-bayer-4x4-even-first">Ordered (Bayer 4×4, even lines first)</option>
+        <option value="ordered-bayer-4x4-odd-first">Ordered (Bayer 4×4, odd lines first)</option>
         <option value="ordered-bayer-8x8">Ordered (Bayer 8×8)</option>
         <option value="halftone">Halftone (clustered dot)</option>
         <option value="none">None</option>
@@ -971,7 +995,8 @@ svg {
       <select id="colorStrategy">
         <option value="segment-coverage" selected>Best segment coverage</option>
         <option value="simplex-coverage">Best simplex coverage</option>
-        <option value="interlaced-segment-coverage">Interlaced segment coverage</option>
+        <option value="interlaced-segment-coverage">Interlaced segment coverage (even first)</option>
+        <option value="interlaced-segment-coverage-odd-first">Interlaced segment coverage (odd first)</option>
         <option value="weighted-average">Weighted average pair fit</option>
         <option value="per-block">Per-block best-fit</option>
         <option value="global">Global pre-quantize + per-block</option>
@@ -1110,26 +1135,46 @@ svg {
           <input id="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
         </div>
         <div id="inputControls" class="control-group" style="display: none">
-          <label class="range">
-            <span class="range-label">Brightness</span>
+          <div class="range range-with-reset">
+            <label class="range-label" for="brightness">Brightness</label>
             <input id="brightness" type="range" min="0" max="100" value="50">
             <span id="brightnessVal" class="range-val">50</span>
-          </label>
-          <label class="range">
-            <span class="range-label">Contrast</span>
+            <button type="button" class="btn-secondary btn-icon range-reset" data-reset-control="brightness" title="Reset brightness" aria-label="Reset brightness" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M 3 3 v 5 h 5 M 3.5 8 a 9 9 0 1 1 -0.5 6"/>
+              </svg>
+            </button>
+          </div>
+          <div class="range range-with-reset">
+            <label class="range-label" for="contrast">Contrast</label>
             <input id="contrast" type="range" min="0" max="100" value="50">
             <span id="contrastVal" class="range-val">50</span>
-          </label>
-          <label class="range">
-            <span class="range-label">Saturation</span>
+            <button type="button" class="btn-secondary btn-icon range-reset" data-reset-control="contrast" title="Reset contrast" aria-label="Reset contrast" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M 3 3 v 5 h 5 M 3.5 8 a 9 9 0 1 1 -0.5 6"/>
+              </svg>
+            </button>
+          </div>
+          <div class="range range-with-reset">
+            <label class="range-label" for="saturation">Saturation</label>
             <input id="saturation" type="range" min="0" max="100" value="50">
             <span id="saturationVal" class="range-val">50</span>
-          </label>
-          <label class="range">
-            <span class="range-label">Gamma</span>
+            <button type="button" class="btn-secondary btn-icon range-reset" data-reset-control="saturation" title="Reset saturation" aria-label="Reset saturation" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M 3 3 v 5 h 5 M 3.5 8 a 9 9 0 1 1 -0.5 6"/>
+              </svg>
+            </button>
+          </div>
+          <div class="range range-with-reset">
+            <label class="range-label" for="gamma">Gamma</label>
             <input id="gamma" type="range" min="30" max="300" value="100">
             <span id="gammaVal" class="range-val">1.00</span>
-          </label>
+            <button type="button" class="btn-secondary btn-icon range-reset" data-reset-control="gamma" title="Reset gamma" aria-label="Reset gamma" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M 3 3 v 5 h 5 M 3.5 8 a 9 9 0 1 1 -0.5 6"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1496,6 +1541,37 @@ for (let y = 0; y < BAYER4.length; y++) {
   bayer4Thresholds[y] = out;
 }
 
+// --- Bayer 4x4 line-first ordered dither threshold matrices ---
+// Preserve Bayer's relative rank order within each row parity while assigning
+// ranks 0-7 to the rows filled first and ranks 8-15 to the remaining rows.
+const BAYER4_EVEN_FIRST = [
+  [ 0,  4,  2,  6],
+  [12,  8, 14, 10],
+  [ 3,  7,  1,  5],
+  [15, 11, 13,  9],
+];
+const bayer4EvenFirstThresholds = new Array(BAYER4_EVEN_FIRST.length);
+for (let y = 0; y < BAYER4_EVEN_FIRST.length; y++) {
+  const row = BAYER4_EVEN_FIRST[y];
+  const out = new Float32Array(row.length);
+  for (let x = 0; x < row.length; x++) out[x] = (row[x] + 0.5) / 16;
+  bayer4EvenFirstThresholds[y] = out;
+}
+
+const BAYER4_ODD_FIRST = [
+  [ 8, 12, 10, 14],
+  [ 4,  0,  6,  2],
+  [11, 15,  9, 13],
+  [ 7,  3,  5,  1],
+];
+const bayer4OddFirstThresholds = new Array(BAYER4_ODD_FIRST.length);
+for (let y = 0; y < BAYER4_ODD_FIRST.length; y++) {
+  const row = BAYER4_ODD_FIRST[y];
+  const out = new Float32Array(row.length);
+  for (let x = 0; x < row.length; x++) out[x] = (row[x] + 0.5) / 16;
+  bayer4OddFirstThresholds[y] = out;
+}
+
 // --- Bayer 8x8 ordered dither threshold matrix ---
 // Aligns with 8x8 attribute blocks and provides finer gradation than 4x4.
 const BAYER8 = [
@@ -1609,6 +1685,8 @@ function blueNoiseHash01(index, rank) {
 }
 
 function bayer4Threshold(x, y) { return bayer4Thresholds[y & 3][x & 3]; }
+function bayer4EvenFirstThreshold(x, y) { return bayer4EvenFirstThresholds[y & 3][x & 3]; }
+function bayer4OddFirstThreshold(x, y) { return bayer4OddFirstThresholds[y & 3][x & 3]; }
 function bayer8Threshold(x, y) { return bayer8Thresholds[y & 7][x & 7]; }
 function clustered8Threshold(x, y) { return clustered8Thresholds[y & 7][x & 7]; }
 function constantThreshold() { return 0.5; }
@@ -1617,6 +1695,8 @@ function constantThreshold() { return 0.5; }
 // the dither mode for every pixel.
 function getThresholdSampler(mode) {
   if (mode === "ordered-bayer-4x4") return bayer4Threshold;
+  if (mode === "ordered-bayer-4x4-even-first") return bayer4EvenFirstThreshold;
+  if (mode === "ordered-bayer-4x4-odd-first") return bayer4OddFirstThreshold;
   if (mode === "ordered-bayer-8x8") return bayer8Threshold;
   if (mode === "halftone") return clustered8Threshold;
   if (mode === "blue-noise") return blueNoiseThreshold;
@@ -1624,7 +1704,8 @@ function getThresholdSampler(mode) {
 }
 
 function isThresholdDither(mode) {
-  return mode === "ordered-bayer-4x4" || mode === "ordered-bayer-8x8" ||
+  return mode === "ordered-bayer-4x4" || mode === "ordered-bayer-4x4-even-first" ||
+         mode === "ordered-bayer-4x4-odd-first" || mode === "ordered-bayer-8x8" ||
          mode === "halftone" || mode === "blue-noise";
 }
 
@@ -3467,11 +3548,18 @@ UI.cropStretch.addEventListener("change", () => {
 });
 
 // --- Settings change triggers reconvert ---
+function updateInputAdjustmentResetButton(control) {
+  const resetButton = control.parentElement.querySelector(".range-reset");
+  if (resetButton) resetButton.disabled = Number(control.value) === Number(control.defaultValue);
+}
+
 function handleSettingControlInput(id, control) {
+  const inputAdjustment = id === "brightness" || id === "contrast" || id === "saturation" || id === "gamma";
   if (id === "brightness") UI.brightnessVal.textContent = control.value;
   if (id === "contrast") UI.contrastVal.textContent = control.value;
   if (id === "saturation") UI.saturationVal.textContent = control.value;
   if (id === "gamma") UI.gammaVal.textContent = (parseInt(control.value, 10) / 100).toFixed(2);
+  if (inputAdjustment) updateInputAdjustmentResetButton(control);
   if (id === "atariGr8FgLuma" || id === "atariGr8BgLuma") updateAtariGr8LumaLabels();
   if (id === "displayMode") {
     currentMode = UI.displayMode.value;
@@ -3493,7 +3581,7 @@ function handleSettingControlInput(id, control) {
     updateModeUI();
   }
   if (sourceImage) {
-    if (id === "brightness" || id === "contrast" || id === "saturation" || id === "gamma") renderCropOverlay();
+    if (inputAdjustment) renderCropOverlay();
     convert();
   }
 }
@@ -3521,14 +3609,29 @@ bindSettingControl("interlaced", UI.interlaced);
 bindSettingControl("serpentine", UI.serpentine);
 bindSettingControl("gaussSeidel", UI.gaussSeidel);
 
+const inputAdjustmentControls = [UI.brightness, UI.contrast, UI.saturation, UI.gamma];
+for (const control of inputAdjustmentControls) {
+  const resetButton = control.parentElement.querySelector(`[data-reset-control="${control.id}"]`);
+  if (!resetButton) continue;
+  resetButton.addEventListener("click", function () {
+    control.value = control.defaultValue;
+    control.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  updateInputAdjustmentResetButton(control);
+}
+
 const ZX_EXHAUSTIVE_COLOR_STRATEGIES = ["segment-coverage", "weighted-average", "global", "per-block", "pca"];
-const WIDE_ATTRIBUTE_COLOR_STRATEGIES = ["segment-coverage", "interlaced-segment-coverage", "weighted-average", "global", "per-block", "pca"];
+const WIDE_ATTRIBUTE_COLOR_STRATEGIES = [
+  "segment-coverage", "interlaced-segment-coverage", "interlaced-segment-coverage-odd-first",
+  "weighted-average", "global", "per-block", "pca",
+];
 const C64_HIRES_COLOR_STRATEGIES = ["segment-coverage", "weighted-average", "per-block"];
 const C64_KOALA_COLOR_STRATEGIES = ["simplex-coverage", "per-block"];
 const ROW_DIFFUSION_DITHER_MODES = ["floyd-steinberg", "atkinson", "stucki", "jarvis-judice-ninke", "burkes", "sierra-lite"];
 const INTERLACED_DITHER_MODES = [
   "floyd-steinberg", "atkinson", "stucki", "jarvis-judice-ninke", "burkes", "sierra-lite", "sierra-line",
-  "blue-noise", "ordered-bayer-4x4", "ordered-bayer-8x8", "halftone",
+  "blue-noise", "ordered-bayer-4x4", "ordered-bayer-4x4-even-first", "ordered-bayer-4x4-odd-first",
+  "ordered-bayer-8x8", "halftone",
 ];
 
 function isZXAttributeMode(mode) {
@@ -3544,6 +3647,15 @@ function isZXSearchStrategy(strategy) {
 
 function supportsInterlacedSegmentCoverage(cfg) {
   return isZXSearchStrategy(cfg.searchStrategy) && cfg.blockW === 8 && cfg.blockH === 1 && cfg.colorsPerBlock === 2;
+}
+
+function isInterlacedSegmentCoverage(strategy) {
+  return strategy === "interlaced-segment-coverage" ||
+    strategy === "interlaced-segment-coverage-odd-first";
+}
+
+function interlacedSegmentFirstParity(strategy) {
+  return strategy === "interlaced-segment-coverage-odd-first" ? 1 : 0;
 }
 
 function isC64HiresMode(mode) {
@@ -3589,7 +3701,7 @@ function modeSupportsGaussSeidel(mode, cfg, ditherMode, colorStrategy) {
   // its per-pixel error metric mis-ranks pattern-dithered blocks (prefers
   // dark, low-contrast solid pairs over correct high-contrast patterns).
   return isZXSearchStrategy(cfg.searchStrategy) && isZXAttributeMode(mode) &&
-    !isThresholdDither(ditherMode) && colorStrategy !== "interlaced-segment-coverage";
+    !isThresholdDither(ditherMode) && !isInterlacedSegmentCoverage(colorStrategy);
 }
 
 function allowedColorStrategiesForMode(mode, cfg, ditherMode = "floyd-steinberg") {
@@ -4935,9 +5047,9 @@ function pipelineStageQuantizeZXExhaustiveBlocks(id) {
     pipelineFail(id, new Error("Missing ZX exhaustive quantize state"), "Unable to quantize image blocks.");
     return;
   }
-  if (state.colorStrategy === "interlaced-segment-coverage" && supportsInterlacedSegmentCoverage(state.modeCfg) &&
+  if (isInterlacedSegmentCoverage(state.colorStrategy) && supportsInterlacedSegmentCoverage(state.modeCfg) &&
       INTERLACED_DITHER_MODES.includes(state.ditherMode)) {
-    pipelineStageQuantizeZXInterlacedEvenBlocks(id);
+    pipelineStageQuantizeZXInterlacedFirstBlocks(id);
     return;
   }
   try {
@@ -4945,7 +5057,7 @@ function pipelineStageQuantizeZXExhaustiveBlocks(id) {
     const palettes = q.zxPalettes;
     const ditherMode = state.ditherMode;
     const perceptual = state.perceptual;
-    const colorStrategy = state.colorStrategy === "interlaced-segment-coverage" ?
+    const colorStrategy = isInterlacedSegmentCoverage(state.colorStrategy) ?
       "segment-coverage" : state.colorStrategy;
     const colorMasks = q.zxColorMasks;
     const work = state.work;
@@ -5183,13 +5295,13 @@ function pipelineStageQuantizeZXExhaustiveBlocks(id) {
   }
 }
 
-// Stage 3a-alt: choose segment-fit attributes for even rows only. Odd rows are
-// selected later from their error-adjusted pixels during the dither pass.
-function pipelineStageQuantizeZXInterlacedEvenBlocks(id) {
+// Stage 3a-alt: choose segment-fit attributes for the first row parity only.
+// The other parity is selected later from its error-adjusted pixels.
+function pipelineStageQuantizeZXInterlacedFirstBlocks(id) {
   if (!pipelineIsCurrent(id)) return;
   const state = conversionPipelineState;
   state.scheduledTimeout = undefined;
-  state.stage = "quantize-zx-interlaced-even-blocks";
+  state.stage = "quantize-zx-interlaced-first-blocks";
   const q = state.quantizeWork;
   const pass = state.quantizePass;
   if (!q || !pass || !q.attrs || !q.zxPalettes || !q.zxPairsAny) {
@@ -5205,14 +5317,19 @@ function pipelineStageQuantizeZXInterlacedEvenBlocks(id) {
     const numAttrCols = q.numAttrCols;
     const numAttrRows = q.numAttrRows;
     const attrs = q.attrs;
-    const evenRows = (numAttrRows + 1) >> 1;
-    const total = numAttrCols * evenRows;
+    const firstParity = interlacedSegmentFirstParity(state.colorStrategy);
+    const secondParity = firstParity ^ 1;
+    const firstRows = (numAttrRows + 1 - firstParity) >> 1;
+    const total = numAttrCols * firstRows;
     const deadline = pipelineWorkDeadline();
+    if (pass.offset === 0) {
+      for (let by = secondParity; by < numAttrRows; by += 2) q.blockColors[by].fill(null);
+    }
     while (pass.offset < total) {
       const unit = pass.offset;
-      const evenRow = (unit / numAttrCols) | 0;
-      const bx = unit - evenRow * numAttrCols;
-      const by = evenRow * 2;
+      const firstRow = (unit / numAttrCols) | 0;
+      const bx = unit - firstRow * numAttrCols;
+      const by = firstRow * 2 + firstParity;
       const blockX = bx * bW;
       const blockY = by * bH;
       const source = q.evalSource;
@@ -5220,12 +5337,11 @@ function pipelineStageQuantizeZXInterlacedEvenBlocks(id) {
       const attr = chooseZXSegmentCoverageAttribute(source, q.zxPairsAny, palettes);
       attrs[by * numAttrCols + bx] = attr;
       setZXAttrBlockColors(q, palettes, by, bx, attr);
-      if (by + 1 < numAttrRows) q.blockColors[by + 1][bx] = null;
       pass.offset++;
       if (pipelineShouldYield(deadline)) break;
     }
     if (pass.offset < total) {
-      pipelineSchedule(pipelineStageQuantizeZXInterlacedEvenBlocks, id);
+      pipelineSchedule(pipelineStageQuantizeZXInterlacedFirstBlocks, id);
       return;
     }
     state.quantizePass = null;
@@ -5892,7 +6008,7 @@ function pipelineStartDitherPass(id, reason) {
   }
   const ditherMode = state.ditherMode;
   const kernel = DIFFUSION_KERNELS[ditherMode] || null;
-  const interlacedSegment = state.colorStrategy === "interlaced-segment-coverage" &&
+  const interlacedSegment = isInterlacedSegmentCoverage(state.colorStrategy) &&
     INTERLACED_DITHER_MODES.includes(ditherMode) && supportsInterlacedSegmentCoverage(state.modeCfg) &&
     !!q.zxPalettes && !!q.zxPairsAny;
   const interlacedDirect = state.interlaced && state.modeCfg.searchStrategy === "pixel-direct" &&
@@ -5921,6 +6037,7 @@ function pipelineStartDitherPass(id, reason) {
     interlaced,
     interlacedThreshold,
     interlacedSegment,
+    interlacedFirstParity: interlacedSegment ? interlacedSegmentFirstParity(state.colorStrategy) : 0,
     interlacedPhase: 0,
     y: 0,
     copyOffset: 0,
@@ -6032,13 +6149,13 @@ function pipelineStageDitherCopyTemp(id) {
     }
     if (pass.interlacedThreshold) {
       pass.interlacedPhase = 0;
-      pass.y = 0;
+      pass.y = pass.interlacedFirstParity;
       pipelineStageDitherInterlacedThresholdRows(id);
       return;
     }
     if (pass.interlaced && pass.kernel) {
       pass.interlacedPhase = 0;
-      pass.y = 0;
+      pass.y = pass.interlacedFirstParity;
       pipelineStageDitherInterlacedRows(id);
       return;
     }
@@ -6167,11 +6284,11 @@ function selectInterlacedSegmentBlock(q, pass, by, bx) {
   setZXAttrBlockColors(q, q.zxPalettes, by, bx, attr);
 }
 
-// Stage 4d-threshold: render even rows first and spread each quantization
-// error through a symmetric Sierra Line fan into the untouched odd rows.
+// Stage 4d-threshold: render the selected first parity and spread each
+// quantization error through a symmetric Sierra Line fan into the other rows.
 // When both adjacent rows exist, each receives half of the total 1/4, 2/4,
 // 1/4 fan; at the image edge, the one available row receives the full fan.
-// Odd rows are then rendered without further propagation.
+// The second parity is then rendered without further propagation.
 function pipelineStageDitherInterlacedThresholdRows(id) {
   if (!pipelineIsCurrent(id)) return;
   const state = conversionPipelineState;
@@ -6186,12 +6303,13 @@ function pipelineStageDitherInterlacedThresholdRows(id) {
   }
   try {
     const sampleThreshold = getThresholdSampler(pass.ditherMode);
+    const secondParity = pass.interlacedFirstParity ^ 1;
     const deadline = pipelineWorkDeadline();
     while (true) {
       if (pass.y >= pass.height) {
         if (pass.interlacedPhase === 0) {
           pass.interlacedPhase = 1;
-          pass.y = 1;
+          pass.y = secondParity;
           continue;
         }
         pipelineStageFinishDitherPass(id);
@@ -6262,12 +6380,12 @@ function pipelineStageDitherInterlacedThresholdRows(id) {
   }
 }
 
-// Stage 4d-alt: render even rows first while accumulating their error into the
-// untouched odd rows, then render the odd rows from that adjusted input. The
-// interlaced attribute strategy selects odd-row colors immediately before use;
-// direct-pixel modes keep their global palette. Odd-to-even error is discarded
-// because every even row is already final; dy=2 kernels may still carry error
-// between odd rows.
+// Stage 4d-alt: render the selected first parity while accumulating its error
+// into the other rows, then render the second parity from that adjusted input.
+// The interlaced attribute strategy selects second-parity colors immediately
+// before use; direct-pixel modes keep their global palette. Error aimed at the
+// finalized first parity is discarded, while dy=2 kernels may still carry
+// error between rows of the second parity.
 function pipelineStageDitherInterlacedRows(id) {
   if (!pipelineIsCurrent(id)) return;
   const state = conversionPipelineState;
@@ -6283,12 +6401,13 @@ function pipelineStageDitherInterlacedRows(id) {
   try {
     const linearRgbTwoColor = pass.linearRgbTwoColor;
     const sierraLine = pass.ditherMode === "sierra-line";
+    const secondParity = pass.interlacedFirstParity ^ 1;
     const deadline = pipelineWorkDeadline();
     while (true) {
       if (pass.y >= pass.height) {
         if (pass.interlacedPhase === 0) {
           pass.interlacedPhase = 1;
-          pass.y = 1;
+          pass.y = secondParity;
           continue;
         }
         pipelineStageFinishDitherPass(id);
@@ -6340,7 +6459,7 @@ function pipelineStageDitherInterlacedRows(id) {
           const sx = rtl ? -dx : dx;
           const nx = x + sx, ny = y + dy;
           if (nx >= 0 && nx < pass.width && ny >= 0 && ny < pass.height &&
-              (pass.interlacedPhase === 0 || (ny & 1) === 1)) {
+              (pass.interlacedPhase === 0 || (ny & 1) === secondParity)) {
             const nIdx = (ny * pass.width + nx) * 3;
             pass.temp[nIdx] += er * weight;
             pass.temp[nIdx + 1] += eg * weight;
@@ -6697,7 +6816,7 @@ function pipelineStageFinishDitherPass(id) {
     const needsGS =
       state.gaussSeidel &&
       !isThresholdDither(state.ditherMode) &&
-      state.colorStrategy !== "interlaced-segment-coverage" &&
+      !isInterlacedSegmentCoverage(state.colorStrategy) &&
       q &&
       isZXSearchStrategy(q.strategy) &&
       isZXAttributeMode(state.mode) &&
@@ -8383,14 +8502,35 @@ function getExportImageRenderer() {
   return getWebGLCanvasRenderer(exportImageCanvas, { preserveDrawingBuffer: true });
 }
 
+function getExportPixelReplication(displayAspect, scale) {
+  const baseCopies = Math.max(1, Math.round(Number(scale) || 1));
+  let aspect = Number(displayAspect);
+  if (!Number.isFinite(aspect) || aspect <= 0) aspect = 1;
+  aspect = Math.max(1 / 4, Math.min(4, aspect));
+  const horizontal = aspect >= 1;
+  const idealCopies = baseCopies * (horizontal ? aspect : 1 / aspect);
+  const maxCopies = baseCopies * 4;
+  let otherCopies = baseCopies;
+  let bestError = Infinity;
+  for (let copies = baseCopies; copies <= maxCopies; copies++) {
+    const error = Math.abs(Math.log(copies / idealCopies));
+    if (error < bestError - 1e-12) {
+      bestError = error;
+      otherCopies = copies;
+    }
+  }
+  return horizontal
+    ? { horizontal: otherCopies, vertical: baseCopies }
+    : { horizontal: baseCopies, vertical: otherCopies };
+}
+
 function exportImage(format, scale) {
   const state = getActiveOutputState();
   if (!state || !state.pixels) return;
   const modeCfg = state.modeCfg || modes[state.mode] || modes.standard;
-  const stretchX = getModeDisplayAspect(modeCfg);
-  const stretchY = 1;
-  const outW = Math.round(state.w * scale * stretchX);
-  const outH = Math.round(state.h * scale * stretchY);
+  const replication = getExportPixelReplication(state.displayAspect, scale);
+  const outW = state.w * replication.horizontal;
+  const outH = state.h * replication.vertical;
   const renderer = getExportImageRenderer();
   const canvas = renderer.canvas;
   const revision = state.revision ?? 0;
@@ -9102,6 +9242,7 @@ function applyProfile(p) {
   UI.contrastVal.textContent = UI.contrast.value;
   UI.saturationVal.textContent = UI.saturation.value;
   UI.gammaVal.textContent = (parseInt(UI.gamma.value, 10) / 100).toFixed(2);
+  for (const control of inputAdjustmentControls) updateInputAdjustmentResetButton(control);
   updateAtariGr8LumaLabels();
   updateCRTSliderLabels();
   initMonoColorPickers();
@@ -9323,8 +9464,9 @@ function scaleLinearRGBA(outPixels, outWidth, outHeight, pixels, width, height) 
 }
 
 function getAdjustmentParams() {
+  const normalizedBrightness = (Number(UI.brightness.value) - 50) / 50;
   return {
-    brightness: Number(UI.brightness.value) * 0.02 - 1,
+    brightness: normalizedBrightness * Math.abs(normalizedBrightness),
     contrast: Number(UI.contrast.value) * 0.02,
     saturation: Number(UI.saturation.value) * 0.02,
     gamma: Math.max(0.001, Number(UI.gamma.value) * 0.01),
