@@ -734,7 +734,11 @@ svg {
   color: var(--text-dim);
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 16px;
 }
+.status-details { display: flex; gap: 16px; margin-left: auto; white-space: nowrap; }
 
 /* Advanced options toggle */
 .advanced {
@@ -862,6 +866,14 @@ svg {
         <optgroup label="Sinclair QL">
           <option value="ql-mode8">QL Mode 8 / Low Res (256×256, 8col)</option>
           <option value="ql-mode4">QL Mode 4 / High Res (512×256, 4col)</option>
+        </optgroup>
+        <optgroup label="ULA+ / PicoVideo">
+          <option value="ula-standard">ULA+ (256×192, 8×8, custom 64-color palette)</option>
+          <option value="ula-ecm">Timex ULA+ ECM (256×192, 8×1, custom 64-color palette)</option>
+          <option value="ula-hires">Timex ULA+ hi-res (512×192, global custom pair)</option>
+          <option value="pv-quad">PicoVideo quad color (256×192, 4 custom colors)</option>
+          <option value="pv-attr">PicoVideo mode 7 (512×192, 8×8 attributes)</option>
+          <option value="ula-attr">PicoVideo mode 7 + ULA+ (512×192, 8×8)</option>
         </optgroup>
         <optgroup label="SAM Coupé">
           <option value="sam-mode1">SAM Mode 1 (256×192, 8×8 attrs, 16 of 128)</option>
@@ -1032,9 +1044,37 @@ svg {
 
     <div class="export-group">
       <h3>Export Binary</h3>
+      <div id="ulaControls" style="display:none">
+        <label for="ulaPreset">ULA+ / PicoVideo palette</label>
+        <select id="ulaPreset">
+          <option value="auto">Automatic custom palette (256 GRB colors)</option>
+          <option value="gray">2-bit grayscale (4 shades)</option>
+          <option value="green">Green shading (8 levels)</option>
+          <option value="red">Red shading (8 levels)</option>
+          <option value="blue">Blue shading (4 levels)</option>
+          <option value="custom">Custom palette registers (JSON)</option>
+        </select>
+        <textarea id="ulaCustom" rows="3" aria-label="Custom palette register bytes" placeholder="JSON array: 64 bytes in hardware bank order; quad mode: 4 bytes" style="display:none;width:100%;box-sizing:border-box"></textarea>
+        <div id="ulaSelectedPalette" style="display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin:8px 0" aria-label="Selected hardware palette"></div>
+        <button id="exportUlaPalette" class="btn-secondary" disabled>Download palette JSON</button>
+        <p id="ulaHelp" class="hint">ULA+: two colors per block from one of four banks. Binary includes palette bytes. TAP stores screen data and a ula-pal palette/mode file for the viewer.</p>
+      </div>
       <div class="export-row">
         <button id="exportBin" class="btn-primary" disabled>Download binary</button>
         <button id="exportTap" class="btn-accent" disabled>Download .TAP</button>
+      </div>
+      <div id="exportViewerRow" style="display:none">
+        <label for="ulaBorder">ULA+ / PicoVideo border</label>
+        <select id="ulaBorder">
+          <option value="black" selected>Black (default)</option>
+          <option value="palette">Use palette color from border picker</option>
+        </select>
+        <p class="hint">Black reserves a black PAPER palette entry. In hi-res, the border and PAPER share the same color.</p>
+        <label class="switch switch-row"><input id="bundleUlaViewer" type="checkbox">Include ULAVIEW program in .TAP</label>
+        <button id="exportUlaPal" class="btn-secondary" disabled>Download ula-pal.bin</button>
+        <a href="viewer/ulaview.tap" download="ulaview.tap">Single-image viewer</a> ·
+        <a href="viewer/ulavpico.tap" download="ulavpico.tap">TS-Pico slideshow</a>
+        <p class="hint">TAP contains ula-pal, ula-df1 and (when needed) ula-df2. Leave the viewer unchecked for slideshow images.</p>
       </div>
       <label id="tapAttrsFirstRow" class="switch switch-row" style="display: none">
         <input id="tapAttrsFirst" type="checkbox">
@@ -1090,8 +1130,9 @@ svg {
         <div id="inputToolbar" class="input-toolbar" style="display: none">
           <label class="switch switch-row">
             <input id="lockAspect" type="checkbox">
-            Lock crop aspect ratio
+            Lock 4:3 crop (1.3333:1)
           </label>
+          <button id="fitCrop43" type="button" class="btn-secondary" title="Largest centered 4:3 crop (1.3333333:1)">Fit 4:3</button>
           <label class="switch switch-row">
             <input id="cropStretch" type="checkbox" checked>
             Stretch
@@ -1289,7 +1330,10 @@ svg {
 
     <div class="status-bar">
       <span id="statusText">Ready. Load an image to begin.</span>
-      <span id="statusSize"></span>
+      <span class="status-details">
+        <span id="statusColors" title="Distinct RGB colors used in the output image, excluding the border and CRT effects."></span>
+        <span id="statusSize"></span>
+      </span>
     </div>
   </main>
 </div>
@@ -1735,6 +1779,270 @@ function blendFactorLinearRgb(r, g, b, c0, c1) {
   return t;
 }
 
+// ULA+ GGGRRRBB; the blue DAC expands BB to BB|(B0 OR B1).
+function buildUlaPalette() {
+  return Array.from({length: 256}, (_, c) => {
+    const blue = c & 3;
+    return [Math.round(((c >> 2) & 7) * 255 / 7),
+      Math.round((c >> 5) * 255 / 7),
+      Math.round(((blue << 1) | (blue ? 1 : 0)) * 255 / 7)];
+  });
+}
+
+function parseUlaCustom(text, count) {
+  let values;
+  try { values = JSON.parse(text); } catch (_) { throw new Error("Custom palette must be a JSON array of register bytes."); }
+  if (!Array.isArray(values) || values.length !== count ||
+      values.some(v => !Number.isInteger(v) || v < 0 || v > 255)) {
+    throw new Error(`Custom palette requires exactly ${count} integers from 0 to 255.`);
+  }
+  return values;
+}
+
+function ulaPresetCodes(preset) {
+  if (preset === "gray") return [0, 109, 182, 255];
+  if (preset === "red") return Array.from({length: 8}, (_, i) => i << 2);
+  if (preset === "green") return Array.from({length: 8}, (_, i) => i << 5);
+  if (preset === "blue") return [0, 1, 2, 3];
+  return Array.from({length: 256}, (_, i) => i);
+}
+
+function prepareUlaSource(state) {
+  const preset = state.ulaPreset;
+  if (preset === "custom") parseUlaCustom(state.ulaCustom, state.mode === "pv-quad" ? 4 : 64);
+  const allowed = new Set(ulaPresetCodes(preset));
+  const mask = new Uint8Array(state.colorMasks[0]);
+  for (let c = 0; c < mask.length; c++) if (!allowed.has(c)) mask[c] = 0;
+  if (!mask.some(Boolean)) throw new Error("Enable at least one color in the selected shading palette.");
+  state.colorMasks = [mask];
+  if (!["gray", "red", "green", "blue"].includes(preset)) return;
+  // Convert source brightness into the chosen gun before palette fitting.
+  // This preserves tonal detail even when the input hue differs from the gun.
+  for (let i = 0; i < state.work.length; i += 3) {
+    const luma = 0.2126 * state.work[i] + 0.7152 * state.work[i + 1] + 0.0722 * state.work[i + 2];
+    state.work[i] = preset === "gray" || preset === "red" ? luma : 0;
+    state.work[i + 1] = preset === "gray" || preset === "green" ? luma : 0;
+    state.work[i + 2] = preset === "gray" || preset === "blue" ? luma : 0;
+  }
+}
+
+// Weighted farthest-point seeds followed by discrete Lloyd refinement.
+// The histogram includes every source pixel; no scanline/column sampling bias.
+function selectUlaColors(work, pal, mask, count) {
+  const candidates = Array.from(mask.keys()).filter(i => mask[i]);
+  const dist = (a, b) => (a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2;
+  const histogram = new Uint32Array(pal.length);
+  for (let i = 0; i < work.length; i += 3) {
+    let best = candidates[0], error = Infinity;
+    for (const c of candidates) {
+      const p = pal[c];
+      const d = (work[i]-p[0])**2 + (work[i+1]-p[1])**2 + (work[i+2]-p[2])**2;
+      if (d < error) { best = c; error = d; }
+    }
+    histogram[best]++;
+  }
+  const selected = [];
+  const distances = new Float64Array(pal.length).fill(Infinity);
+  const uniqueCount = Math.min(count, candidates.length);
+  while (selected.length < uniqueCount) {
+    let best = candidates.find(c => !selected.includes(c)), score = -1;
+    for (const c of candidates) {
+      if (selected.includes(c)) continue;
+      const value = selected.length ? histogram[c] * distances[c] : histogram[c];
+      if (value > score) { best = c; score = value; }
+    }
+    selected.push(best);
+    for (const c of candidates) distances[c] = Math.min(distances[c], dist(pal[c], pal[best]));
+  }
+  for (let pass = 0; pass < 4; pass++) {
+    const sums = selected.map(() => [0, 0, 0, 0]);
+    for (const c of candidates) {
+      if (!histogram[c]) continue;
+      let best = 0, error = Infinity;
+      selected.forEach((v, i) => { const d = dist(pal[c], pal[v]); if (d < error) { best = i; error = d; } });
+      const sum = sums[best], n = histogram[c];
+      for (let k = 0; k < 3; k++) sum[k] += pal[c][k] * n;
+      sum[3] += n;
+    }
+    sums.forEach((sum, i) => {
+      if (!sum[3]) return;
+      const mean = sum.slice(0, 3).map(v => v / sum[3]);
+      let best = selected[i], error = dist(mean, pal[best]);
+      for (const c of candidates) {
+        if (selected.some((v, j) => j !== i && v === c)) continue;
+        const d = dist(mean, pal[c]); if (d < error) { best = c; error = d; }
+      }
+      selected[i] = best;
+    });
+  }
+  // Repeat small shading palettes in every half-bank so either role has all shades.
+  return Array.from({length: count}, (_, i) => selected[i % selected.length]);
+}
+
+function startUlaQuantize(id, resultLinear) {
+  const state = conversionPipelineState, cfg = state.modeCfg, pal = state.palettes[0];
+  let registers;
+  if (state.ulaPreset === "custom") registers = parseUlaCustom(state.ulaCustom, 64);
+  else {
+    const codes = selectUlaColors(state.work, pal, state.colorMasks[0], state.mode === "ula-hires" ? 2 : 64);
+    codes.sort((a, b) => {
+      const luma = c => 0.2126 * pal[c][0] + 0.7152 * pal[c][1] + 0.0722 * pal[c][2];
+      return luma(a) - luma(b);
+    });
+    registers = new Array(64);
+    // Deal luma ranks into eight halves, keeping each half's full tonal range.
+    for (let i = 0; i < 64; i++) registers[(i % 8) * 8 + (i >> 3)] = codes[i % codes.length];
+    if (state.mode === "ula-hires") { registers[0] = codes[0]; registers[15] = codes[1]; }
+  }
+  const paletteBorder = state.ulaPaletteBorder === true;
+  if (!paletteBorder) {
+    if (state.mode === "ula-hires") {
+      const luma = c => 0.2126 * pal[c][0] + 0.7152 * pal[c][1] + 0.0722 * pal[c][2];
+      if (luma(registers[15]) > luma(registers[0])) registers[0] = registers[15];
+      registers[15] = 0;
+    } else registers[8] = 0;
+  }
+  const rows = 192 / cfg.blockH, cols = cfg.w / cfg.blockW;
+  state.quantizeWork = {
+    resultLinear, attrs: new Uint8Array(rows * cols),
+    blockColors: ensureBlockGrid(null, rows, cols), blockIndices: null,
+    modeMeta: {ulaRegisters: registers, paletteBorder}, bW: cfg.blockW, bH: cfg.blockH,
+    numAttrCols: cols, numAttrRows: rows, strategy: "ula-clut", linearRgbTwoColor: true,
+  };
+  if (state.mode === "ula-hires") {
+    state.quantizeWork.blockColors[0][0] = [pal[registers[0]], pal[registers[15]]];
+    state.quantizeWork.attrs[0] = 56; // port FF=6: INK 0, PAPER 7, bank 0
+    pipelineStageDitherQuantizedBlocks(id);
+    return;
+  }
+  state.quantizePass = {offset: 0};
+  pipelineStageUlaBlocks(id);
+}
+
+function pipelineStageUlaBlocks(id) {
+  if (!pipelineIsCurrent(id)) return;
+  const state = conversionPipelineState, q = state.quantizeWork, pass = state.quantizePass;
+  const regs = q.modeMeta.ulaRegisters, pal = state.palettes[0];
+  const end = Math.min(q.attrs.length, pass.offset + 32);
+  // All 256 legal attributes: bank from FLASH/BRIGHT, separate INK/PAPER halves.
+  for (; pass.offset < end; pass.offset++) {
+    const bx = pass.offset % q.numAttrCols, by = Math.floor(pass.offset / q.numAttrCols);
+    let bestAttr = 0, bestError = Infinity;
+    const samples = [];
+    for (let y = by*q.bH; y < (by+1)*q.bH; y++) for (let x = bx*8; x < bx*8+8; x++) {
+      const i = (y*state.screenWidth+x)*3;
+      samples.push([state.work[i], state.work[i+1], state.work[i+2]]);
+    }
+    for (let attr = 0; attr < 256; attr++) {
+      const base = (attr >> 6)*16;
+      const a = pal[regs[base+(attr&7)]], b = pal[regs[base+8+((attr>>3)&7)]];
+      const dr = b[0]-a[0], dg = b[1]-a[1], db = b[2]-a[2], denom = dr*dr+dg*dg+db*db;
+      let error = 0;
+      for (const p of samples) {
+        const t = denom ? Math.max(0, Math.min(1, ((p[0]-a[0])*dr+(p[1]-a[1])*dg+(p[2]-a[2])*db)/denom)) : 0;
+        error += (p[0]-a[0]-t*dr)**2+(p[1]-a[1]-t*dg)**2+(p[2]-a[2]-t*db)**2;
+        if (error >= bestError) break;
+      }
+      if (error < bestError) { bestError = error; bestAttr = attr; }
+    }
+    q.attrs[pass.offset] = bestAttr;
+    const base = (bestAttr >> 6)*16;
+    q.blockColors[by][bx] = [pal[regs[base+(bestAttr&7)]], pal[regs[base+8+((bestAttr>>3)&7)]]];
+  }
+  if (pass.offset < q.attrs.length) pipelineSchedule(pipelineStageUlaBlocks, id);
+  else { state.quantizePass = null; pipelineStageDitherQuantizedBlocks(id); }
+}
+
+function videoBitmapOffset(y) { return ((y&0xC0)<<5)|((y&7)<<8)|((y&0x38)<<2); }
+
+function generateVideoOutput(mode, pixels, attrs, meta, border = 0) {
+  if (meta.paletteBorder === false) border = 0;
+  const cfg = modes[mode], quad = mode === "pv-quad", ula = mode.startsWith("ula-");
+  const registers = quad ? Array.from(meta.atariRegs) : (ula ? meta.ulaRegisters : []);
+  const palette = ulaPalette;
+  const wide = cfg.w === 512, ecm = mode === "ula-ecm";
+  const bankSize = quad || ecm || mode === "ula-hires" ? 6144 : 6912;
+  const banks = Array.from({length: wide || quad || ecm ? 2 : 1}, () => new Uint8Array(bankSize));
+  const nearest = (pixel, a, b) => {
+    const d = c => (pixels[pixel]-c[0])**2+(pixels[pixel+1]-c[1])**2+(pixels[pixel+2]-c[2])**2;
+    return d(a) <= d(b);
+  };
+  for (let y = 0; y < 192; y++) for (let col = 0; col < cfg.w/8; col++) {
+    const attr = mode === "ula-hires" ? 56 : (quad ? 0 : attrs[Math.floor(y/cfg.blockH)*(cfg.w/8)+col]);
+    const base = (attr >> 6)*16;
+    const a = ula ? palette[registers[base+(attr&7)]] : ((attr&64) ? PALETTE_TS_BRIGHT : PALETTE_NORMAL)[attr&7];
+    const b = ula ? palette[registers[base+8+((attr>>3)&7)]] : ((attr&64) ? PALETTE_TS_BRIGHT : PALETTE_NORMAL)[(attr>>3)&7];
+    const bank = wide ? col&1 : 0, column = wide ? col>>1 : col;
+    let byte = 0;
+    for (let bit = 0; bit < 8; bit++) {
+      const pixel = (y*cfg.w+col*8+bit)*3;
+      if (quad) {
+        let best = 0, error = Infinity;
+        registers.forEach((r, i) => { const c = palette[r]; const d = (pixels[pixel]-c[0])**2+(pixels[pixel+1]-c[1])**2+(pixels[pixel+2]-c[2])**2; if (d < error) { best = i; error = d; } });
+        banks[bit>>2][y*32+col] |= best << (6-2*(bit&3));
+      } else if (nearest(pixel, a, b)) byte |= 128 >> bit;
+    }
+    if (!quad) {
+      banks[bank][videoBitmapOffset(y)+column] = byte;
+      if (ecm) banks[1][videoBitmapOffset(y)+column] = attr;
+      else if (bankSize === 6912) banks[bank][6144+(y>>3)*32+column] = attr;
+    }
+  }
+  const bytes = new Uint8Array(banks.reduce((n, b) => n+b.length, 0)+registers.length);
+  let offset = 0;
+  const blocks = banks.map((data, i) => {
+    bytes.set(data, offset); offset += data.length;
+    return {data, addr: 41040 + (i ? banks[0].length : 0), name: `ula-df${i+1}`};
+  });
+  bytes.set(registers, offset);
+  const paletteFile = makeUlaPaletteFile(mode, banks, registers, border);
+  blocks.push({data: paletteFile, addr: 40960, name: "ula-pal"});
+  return {bytes, blocks};
+}
+
+function supportsUlaViewer(mode) {
+  return ["ula-standard", "ula-ecm", "ula-hires", "ula-attr", "pv-attr", "pv-quad"].includes(mode);
+}
+
+// ula-pal v2: 16 bytes of mode/length/checksum metadata + 64 palette slots.
+function makeUlaPaletteFile(mode, screens, registers, border = 0) {
+  const length1 = screens[0].length, length2 = screens[1]?.length || 0;
+  const flags = mode === "pv-quad" ? 2 : mode.startsWith("ula-") ? 1 : 0;
+  const data = new Uint8Array(80);
+  data.set([85, 76, 65, 86, 2, modes[mode].port, flags, Math.max(0, Math.min(7, border | 0)),
+    length1 & 255, length1 >> 8, length2 & 255, length2 >> 8, registers.length, 0, 0, 0]);
+  data.set(registers, 16);
+  let checksum = 0;
+  for (let i = 16; i < 80; i++) checksum = (checksum + data[i]) & 65535;
+  for (const screen of screens) for (const value of screen) checksum = (checksum + value) & 65535;
+  data[14] = checksum & 255; data[15] = checksum >> 8;
+  return data;
+}
+
+// The viewer stages the separately loaded palette and screen files contiguously.
+function generateUlaViewerImage(mode, pixels, attrs, meta, border = 0) {
+  if (!supportsUlaViewer(mode)) throw new Error("This mode has no ULAVIEW image format.");
+  const output = generateVideoOutput(mode, pixels, attrs, meta, border);
+  const screens = output.blocks.slice(0, -1);
+  const data = new Uint8Array(80 + screens.reduce((n, b) => n + b.data.length, 0));
+  data.set(output.blocks.at(-1).data);
+  let offset = 80;
+  for (const block of screens) { data.set(block.data, offset); offset += block.data.length; }
+  return data;
+}
+
+// BEGIN GENERATED ULAVIEW READER
+const ULAVIEW_TAP_BASE64 = "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";
+// END GENERATED ULAVIEW READER
+
+function bundleUlaViewerTape(imageTape) {
+  if (!ULAVIEW_TAP_BASE64) throw new Error("The bundled ULAVIEW reader has not been built.");
+  const program = Uint8Array.from(atob(ULAVIEW_TAP_BASE64), c => c.charCodeAt(0));
+  const tape = new Uint8Array(program.length + imageTape.length);
+  tape.set(program); tape.set(imageTape, program.length);
+  return tape;
+}
+
 // --- Display modes ---
 // Generalized mode config (extensible to other machines like QL or C64):
 //   w, h            — screen resolution in source pixels
@@ -2040,6 +2348,28 @@ const modes = {
   },
 };
 
+const ulaPalette = buildUlaPalette();
+for (const [id, width, blockHeight, port] of [
+  ["ula-standard", 256, 8, 0], ["ula-ecm", 256, 1, 2],
+  ["ula-hires", 512, 192, 6], ["ula-attr", 512, 8, 7],
+]) {
+  modes[id] = {
+    w: width, h: 192, blockW: id === "ula-hires" ? 512 : 8, blockH: blockHeight,
+    colorsPerBlock: 2, palettes: [ulaPalette], mandatoryColor: null, borderPalette: PALETTE_NORMAL,
+    searchStrategy: "ula-clut", colorful: true, port, label: id,
+    border: {left: width / 8, right: width / 8, top: 24, bottom: 24},
+    ext: "scr", supportsTap: true,
+  };
+}
+modes["pv-quad"] = {
+  ...modes["ula-standard"], blockW: 256, blockH: 192, colorsPerBlock: 4,
+  searchStrategy: "global-prequantize", port: 3, label: "pv-quad", ext: "pv3",
+};
+modes["pv-attr"] = {
+  ...modes["ts-standard"], w: 512, port: 7, label: "pv-attr",
+  border: {left: 64, right: 64, top: 24, bottom: 24},
+};
+
 const palettes = {};
 for (const key in modes) {
   palettes[key] = srgbToLinearPalettes(modes[key].palettes);
@@ -2101,6 +2431,10 @@ const CUSTOM_MODE_REQUIRED_FIELDS = ["w", "h", "blockW", "blockH", "colorsPerBlo
 function byId(id) { return document.getElementById(id); }
 
 const UI = {
+  ulaBorder: byId("ulaBorder"),
+  exportUlaPal: byId("exportUlaPal"), bundleUlaViewer: byId("bundleUlaViewer"), exportViewerRow: byId("exportViewerRow"),
+  exportUlaPalette: byId("exportUlaPalette"), ulaSelectedPalette: byId("ulaSelectedPalette"),
+  ulaPreset: byId("ulaPreset"), ulaCustom: byId("ulaCustom"), ulaControls: byId("ulaControls"),
   root: document.documentElement,
   advancedToggle: byId("advancedToggle"),
   atariGr8BgHue: byId("atariGr8BgHue"),
@@ -2199,6 +2533,7 @@ const UI = {
   interlacedRow: byId("interlacedRow"),
   loadNewBtn: byId("loadNewBtn"),
   lockAspect: byId("lockAspect"),
+  fitCrop43: byId("fitCrop43"),
   modesFileInput: byId("modesFileInput"),
   monoColorsGroup: byId("monoColorsGroup"),
   monoInkButton: byId("monoInkButton"),
@@ -2231,6 +2566,7 @@ const UI = {
   sidebar: byId("sidebar"),
   snapshotBtn: byId("snapshotBtn"),
   statusSize: byId("statusSize"),
+  statusColors: byId("statusColors"),
   statusText: byId("statusText"),
   tapAttrsFirst: byId("tapAttrsFirst"),
   tapAttrsFirstRow: byId("tapAttrsFirstRow"),
@@ -3010,6 +3346,7 @@ function loadImage(file) {
   sourceImageLinear = null;
   convertedLinearPixels = null;
   activeOutputState = null;
+  UI.statusColors.textContent = "";
   binaryExportState = null;
   outputExportEpoch++;
   outputViewMode = "active";
@@ -3099,6 +3436,7 @@ function pipelineStageSourceImageDecoded(id, readResult) {
   state.sourceImage = img;
   state.sourceImageLinear = decoded;
   cropRect = { x: 0, y: 0, w: img.width, h: img.height };
+  if (cropAspectLocked) cropRect = fitCropToAspect(cropRect, img.width, img.height);
   UI.statusText.textContent = `Loaded: ${img.width}x${img.height}`;
   UI.originalCanvas.style.display = "";
   UI.dropZone.style.display = "none";
@@ -3540,8 +3878,31 @@ window.addEventListener("mouseup", () => {
   if (changed && sourceImage) convert();
 });
 
+// Inscribe an exact 4:3 crop around the selection's center, inside the image.
+function fitCropToAspect(rect, imageWidth, imageHeight, ratio = 4 / 3) {
+  const h = Math.min(rect.h, rect.w / ratio, imageHeight, imageWidth / ratio);
+  const w = h * ratio;
+  return {
+    x: Math.max(0, Math.min(imageWidth - w, rect.x + (rect.w - w) / 2)),
+    y: Math.max(0, Math.min(imageHeight - h, rect.y + (rect.h - h) / 2)),
+    w, h,
+  };
+}
+
 UI.lockAspect.addEventListener("change", e => {
   cropAspectLocked = e.target.checked;
+  if (cropAspectLocked && sourceImage && cropRect) {
+    cropRect = fitCropToAspect(cropRect, sourceImage.width, sourceImage.height);
+    renderCropOverlay();
+    convert();
+  }
+});
+UI.fitCrop43.addEventListener("click", () => {
+  if (!sourceImage) return;
+  UI.lockAspect.checked = cropAspectLocked = true;
+  cropRect = fitCropToAspect({x: 0, y: 0, w: sourceImage.width, h: sourceImage.height}, sourceImage.width, sourceImage.height);
+  renderCropOverlay();
+  convert();
 });
 UI.cropStretch.addEventListener("change", () => {
   if (sourceImage) convert();
@@ -3590,6 +3951,16 @@ function bindSettingControl(id, control) {
   control.addEventListener("input", function () { handleSettingControlInput(id, control); });
 }
 
+for (const control of [UI.ulaPreset, UI.ulaCustom, UI.ulaBorder]) control.addEventListener("input", () => {
+  UI.ulaCustom.style.display = UI.ulaPreset.value === "custom" ? "" : "none";
+  if (sourceImage) convert();
+});
+UI.exportUlaPalette.addEventListener("click", () => {
+  const state = getCurrentBinaryExportState();
+  if (!state || state.mode !== UI.displayMode.value) return;
+  const regs = state.modeMeta.ulaRegisters || (state.mode === "pv-quad" ? Array.from(state.modeMeta.atariRegs) : null);
+  if (regs) downloadBlob(new Blob([JSON.stringify(regs)], {type: "application/json"}), `palette_${state.mode}.json`);
+});
 bindSettingControl("displayMode", UI.displayMode);
 bindSettingControl("ditherMode", UI.ditherMode);
 bindSettingControl("colorStrategy", UI.colorStrategy);
@@ -3635,7 +4006,7 @@ const INTERLACED_DITHER_MODES = [
 ];
 
 function isZXAttributeMode(mode) {
-  return mode === "standard" || mode === "ts-standard" || mode === "ecm" ||
+  return mode === "standard" || mode === "ts-standard" || mode === "ecm" || mode === "pv-attr" ||
          mode === "sam-mode1" || mode === "sam-mode2";
 }
 
@@ -3675,7 +4046,7 @@ function modeUsesDither(cfg) {
 // palettes above four colors. The 4-color hull-coverage modes model pure
 // linear-light mixing and stay linear.
 function modeUsesPaletteSelection(cfg) {
-  return cfg.searchStrategy === "sam-clut" ||
+  return cfg.searchStrategy === "ula-clut" || cfg.searchStrategy === "sam-clut" ||
     (cfg.searchStrategy === "global-prequantize" && cfg.colorsPerBlock > 4);
 }
 
@@ -3744,6 +4115,10 @@ function updateSelectAvailability(select, allowedValues) {
 function updateModeUI() {
   const mode = UI.displayMode.value;
   const cfg = modes[mode] ?? modes.standard;
+  UI.exportViewerRow.style.display = supportsUlaViewer(mode) ? "" : "none";
+  UI.exportUlaPalette.disabled = !binaryExportState || binaryExportState.mode !== mode;
+  setControlVisible(UI.ulaControls, cfg.searchStrategy === "ula-clut" || mode === "pv-quad");
+  UI.ulaCustom.style.display = UI.ulaPreset.value === "custom" ? "" : "none";
   const usesDither = modeUsesDither(cfg);
   const colorStrategies = allowedColorStrategiesForMode(mode, cfg, UI.ditherMode.value);
   const showGrid = modeSupportsGridOverlay(cfg);
@@ -4294,6 +4669,9 @@ function convert() {
   state.perceptualPalette = UI.perceptualSwitch.checked && modeUsesPaletteSelection(state.modeCfg);
   state.colorStrategy = UI.colorStrategy.value;
   state.colorMasks = enabledColorMasks(state.mode);
+  state.ulaPreset = UI.ulaPreset.value;
+  state.ulaCustom = UI.ulaCustom.value;
+  state.ulaPaletteBorder = UI.ulaBorder.value === "palette";
   state.hiresPair = parseInt(UI.hiresPair.value, 10) || 0;
   state.monoInk = Math.max(0, Math.min(7, parseInt(UI.inkColor.value, 10) || 0));
   state.monoPaper = Math.max(0, Math.min(7, parseInt(UI.paperColor.value, 10) || 0));
@@ -4733,12 +5111,24 @@ function pipelineStageQuantizeMode(id) {
   let numAttrRows = Math.max(1, Math.round(screenH / bH));
   let blockColors = null;
   let blockIndices = null;
-  const modeMeta = {};
+  const modeMeta = {paletteBorder: state.ulaPaletteBorder};
   const evalSize = bW * bH * 3;
 
   const strategy = modeCfg.searchStrategy;
+  if (strategy === "ula-clut" || mode === "pv-quad") {
+    try {
+      prepareUlaSource(state);
+      if (strategy === "ula-clut") {
+        startUlaQuantize(id, resultLinear);
+        return;
+      }
+    } catch (err) {
+      pipelineFail(id, err, err.message);
+      return;
+    }
+  }
 
-  if (strategy === "exhaustive" && (mode === "standard" || mode === "ts-standard" || mode === "ecm")) {
+  if (strategy === "exhaustive" && (mode === "standard" || mode === "ts-standard" || mode === "ecm" || mode === "pv-attr")) {
     attrs = state.attrsBuffer = ensureUint8Buffer(state.attrsBuffer, numAttrCols * numAttrRows);
     blockColors = state.blockColorsGridBuffer = ensureBlockGrid(state.blockColorsGridBuffer, numAttrRows, numAttrCols);
     state.quantizeWork = {
@@ -5798,6 +6188,11 @@ function pipelineStageQuantizeGlobalGreedyHull(id) {
         pass.colorCount,
         pass.selectedColors
       );
+    }
+    if (state.mode === "pv-quad" && state.ulaPreset === "custom") {
+      const codes = parseUlaCustom(state.ulaCustom, 4);
+      pass.selectedIndices.set(codes);
+      pass.selectedColors = codes.map(c => pass.pal[c]);
     }
     pipelineStageQuantizeGlobalFinish(id);
   } catch (err) {
@@ -7103,6 +7498,23 @@ function pipelineStageFinishRenderConversionResult(id) {
     return;
   }
   hideOutputGenerationNotice();
+  const videoRegisters = modeMeta.ulaRegisters || (state.mode === "pv-quad" ? Array.from(modeMeta.atariRegs) : null);
+  UI.exportUlaPalette.disabled = !videoRegisters;
+  UI.ulaSelectedPalette.replaceChildren();
+  if (videoRegisters) {
+    for (let i = 0; i < videoRegisters.length; i++) {
+      const color = ulaPalette[videoRegisters[i]], swatch = document.createElement("span");
+      swatch.style.cssText = `height:14px;background:rgb(${color.join(",")})`;
+      swatch.title = `Register ${i}: ${videoRegisters[i]} (RGB ${color.join(", ")})`;
+      UI.ulaSelectedPalette.appendChild(swatch);
+    }
+  }
+  if (modeMeta.ulaRegisters) {
+    const regs = modeMeta.ulaRegisters;
+    state.modeCfg = {...state.modeCfg, borderPalette: state.mode === "ula-hires" ?
+      [ulaPalette[regs[15]]] : regs.slice(8, 16).map(c => ulaPalette[c])};
+  }
+  if (supportsUlaViewer(state.mode)) state.modeCfg = {...state.modeCfg, fixedBlackBorder: !state.ulaPaletteBorder};
   currentMode = state.mode;
   screenWidth = state.screenWidth;
   screenHeight = state.screenHeight;
@@ -8239,6 +8651,24 @@ function generateTap(blocks) {
   return tap;
 }
 
+function getOutputColorCount(state) {
+  // Output buffers are linear RGB. Count their exported 8-bit sRGB colors,
+  // rather than palette slots (which may be duplicated or unused).
+  if (state.colorCount == null || state.colorCountRevision !== state.revision) {
+    const colors = new Set();
+    const pixels = state.pixels;
+    for (let i = 0; i < pixels.length; i += 3) {
+      const r = Math.max(0, Math.min(255, Math.round(linearToSrgb(pixels[i]))));
+      const g = Math.max(0, Math.min(255, Math.round(linearToSrgb(pixels[i + 1]))));
+      const b = Math.max(0, Math.min(255, Math.round(linearToSrgb(pixels[i + 2]))));
+      colors.add((r << 16) | (g << 8) | b);
+    }
+    state.colorCount = colors.size;
+    state.colorCountRevision = state.revision;
+  }
+  return state.colorCount;
+}
+
 function getActiveOutputState() {
   return activeOutputState && activeOutputState.pixels ? activeOutputState : null;
 }
@@ -8276,6 +8706,9 @@ function getDisplayedOutputModeCfg() {
 function renderDisplayedOutput(shaderTime = performance.now() * 0.001) {
   const state = getDisplayedOutputState();
   if (!state || !state.pixels) return;
+  const count = getOutputColorCount(state);
+  const label = `${count} ${count === 1 ? "color" : "colors"}`;
+  if (UI.statusColors.textContent !== label) UI.statusColors.textContent = label;
   const scale = getPreviewScale();
   const renderer = getCRTOutputRenderer();
   crtSetImage(renderer, state.pixels, state.w, state.h, state.displayAspect, state.outScale, getModeBorder(state.modeCfg), state.revision ?? 0);
@@ -8339,6 +8772,7 @@ function getPreviewScale() {
 }
 
 function setExportButtonsEnabled(enabled, mode = currentMode) {
+  UI.exportUlaPal.disabled = !enabled || !supportsUlaViewer(mode);
   const cfg = modes[mode] ?? modes.standard;
   const hasPixels = enabled && !!activeOutputState;
   UI.exportPng1x.disabled = !hasPixels;
@@ -8443,6 +8877,10 @@ function buildBinaryExportData() {
       { data: df1, addr: 0x4000, name: "hi-df1" },
       { data: df2, addr: 0x6000, name: "hi-df2" },
     ];
+  } else if (mode.startsWith("ula-") || mode === "pv-quad" || mode === "pv-attr") {
+    const output = generateVideoOutput(mode, pixels, attrs, modeMeta);
+    bytes = output.bytes;
+    blocks = output.blocks;
   } else if (mode === "sam-mode1") {
     bytes = generateSamMode1(pixels, attrs, modeMeta.samClut);
   } else if (mode === "sam-mode2") {
@@ -8571,16 +9009,32 @@ UI.exportTap.addEventListener("click", () => {
   const state = buildBinaryExportData();
   if (!state || !state.tapBlocks) return;
   let blocks = state.tapBlocks;
+  if (supportsUlaViewer(state.mode)) {
+    const border = Number.isInteger(crtBorderColorIndex) ? crtBorderColorIndex : 0;
+    const output = generateVideoOutput(state.mode, ensureStateSRGBPixels(state), state.attrs, state.modeMeta, border);
+    blocks = [output.blocks.at(-1), ...output.blocks.slice(0, -1)];
+  }
   if (state.mode === "ecm" && UI.tapAttrsFirst.checked) {
     // Each block carries its own load address, so emitting the attribute block
     // first is safe and lets ECMview paint the image artifact-free.
     const attrIdx = blocks.findIndex(b => b.name === "ecm-atr");
     if (attrIdx > 0) blocks = [blocks[attrIdx], ...blocks.filter((_, i) => i !== attrIdx)];
   }
-  const tap = generateTap(blocks);
+  let tap = generateTap(blocks);
+  if (supportsUlaViewer(state.mode) && UI.bundleUlaViewer.checked) tap = bundleUlaViewerTape(tap);
   const label = modes[state.mode].label;
   downloadBlob(new Blob([tap], { type: "application/octet-stream" }),
                `image_${label}.tap`);
+});
+
+UI.exportUlaPal.addEventListener("click", () => {
+  const state = getCurrentBinaryExportState();
+  if (!state || !supportsUlaViewer(state.mode)) return;
+  const pixels = ensureStateSRGBPixels(state);
+  if (!pixels) return;
+  const border = Number.isInteger(crtBorderColorIndex) ? crtBorderColorIndex : 0;
+  const output = generateVideoOutput(state.mode, pixels, state.attrs, state.modeMeta, border);
+  downloadBlob(new Blob([output.blocks.at(-1).data], {type: "application/octet-stream"}), "ula-pal.bin");
 });
 
 // Pico-8 hex .txt export — 128 rows of 128 hex digits (one per pixel)
@@ -8626,6 +9080,7 @@ function getHiresPaperColorIndex() {
 }
 
 function getModeBorderPalette(modeCfg) {
+  if (modeCfg?.fixedBlackBorder) return MODE_BORDER_BLACK_PALETTE;
   if (!hasVisibleModeBorder(modeCfg)) return [];
   if (modeCfg && modeCfg.borderPalette === "paper") {
     modeBorderPaperPalette[0] = PALETTE_NORMAL[getHiresPaperColorIndex()];
@@ -9096,6 +9551,9 @@ function getCurrentProfile() {
     contrast: parseInt(UI.contrast.value, 10),
     saturation: parseInt(UI.saturation.value, 10),
     gamma: parseInt(UI.gamma.value, 10),
+    ulaPreset: UI.ulaPreset.value,
+    ulaCustom: UI.ulaCustom.value,
+    ulaBorder: UI.ulaBorder.value,
     hiresPair: UI.hiresPair.value,
     atariHue: UI.atariHue.value,
     atariGr8FgHue: UI.atariGr8FgHue.value,
@@ -9168,6 +9626,9 @@ function applyProfile(p) {
   setProfileControl(UI.contrast, p.contrast);
   setProfileControl(UI.saturation, p.saturation);
   setProfileControl(UI.gamma, p.gamma);
+  setProfileControl(UI.ulaPreset, p.ulaPreset);
+  if (typeof p.ulaCustom === "string") UI.ulaCustom.value = p.ulaCustom;
+  UI.ulaBorder.value = p.ulaBorder === "palette" ? "palette" : "black";
   setProfileControl(UI.hiresPair, p.hiresPair);
   setProfileControl(UI.atariHue, p.atariHue);
   setProfileControl(UI.atariGr8FgHue, p.atariGr8FgHue);
@@ -9238,6 +9699,7 @@ function applyProfile(p) {
     }
   }
   // Update display values
+  if (cropAspectLocked && sourceImage && cropRect) cropRect = fitCropToAspect(cropRect, sourceImage.width, sourceImage.height);
   UI.brightnessVal.textContent = UI.brightness.value;
   UI.contrastVal.textContent = UI.contrast.value;
   UI.saturationVal.textContent = UI.saturation.value;

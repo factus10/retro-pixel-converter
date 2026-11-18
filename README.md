@@ -46,7 +46,7 @@ Custom modes can also be imported from JSON at runtime. PNG/JPG export works for
 - Drag-and-drop or browse for an image, then crop interactively in the input panel.
 - Leave `Autodetect` enabled to classify the source as grayscale, line art, or a photo and apply mode-aware dithering and color-search recommendations. Manual changes to either recommended control are respected; the toggle is enabled by default and its state persists locally.
 - Resize the input/output split manually with the center divider.
-- Lock crop aspect ratio, stretch the selected crop to the target resolution, or turn Stretch off and fill side bars with the configured RGB crop fill color. Filled bars are part of the target image and can be dithered like any other pixels.
+- **Lock 4:3 crop (1.3333:1)** immediately fits the selection to the screen's display aspect and preserves it while resizing. **Fit 4:3** creates the largest centered 4:3 crop inside the source image and enables the lock. The lock also applies when loading another image and is saved in profiles. Stretch the selected crop to the target resolution, or turn Stretch off and fill side bars with the configured RGB crop fill color. Filled bars are part of the target image and can be dithered like any other pixels.
 - Use brightness, contrast, saturation, gamma, dithering, palette, and search controls to tune the conversion. Input brightness uses a signed-quadratic response for fine adjustment near the neutral value of 50 while retaining the full effect at 0 and 100.
 - Reset any input-image adjustment to its default with the icon beside its slider.
 - Inspect available colors with the mode-aware palette strip and disable individual colors for palette-search modes when needed.
@@ -148,6 +148,45 @@ Atari 800: `.mic` loads in MicroPainter-compatible tools. `.gr8` and `.gr9` are 
 QL: `_scr` is a direct dump of screen RAM at base `$20000`, loadable in common QL emulators with commands such as `LBYTES file,131072`.
 
 SAM Coupé: `.ss1`-`.ss4` are SAM SCREEN$ files (`LOAD "file" SCREEN$`, loadable in SimCoupe): the mode's screen memory as-is, followed by a 41-byte palette trailer — 16 CLUT bytes plus 4 mode-3 store bytes for each of the two flash phases (written identical here), then a `0xFF` terminator; no line-interrupt records are emitted. Palette bytes are 7-bit SAM colors (GRN1 RED1 BLU1 BRIGHT GRN0 RED0 BLU0; BRIGHT adds a half step to all guns). Mode 1 uses the Spectrum-interleaved bitmap layout; mode 2 is linear with attributes at offset 8192; both use Spectrum-style attribute bytes whose BRIGHT bit selects the CLUT half (note: some references describe mode 2 attributes as free paper/ink nibbles, but the SimCoupe reference emulator decodes them exactly like mode 1). Mode 3 pixel values 1 and 2 are fetched from CLUT entries 2 and 1 respectively, so the `.ss3` CLUT is written swap-adjusted while the mode-3 store bytes hold the colors in pixel-value order.
+
+## ULA+ and PicoVideo
+
+The first-run display mode remains **Standard Spectrum**, matching the existing release. ULA+ and PicoVideo modes are opt-in. The output status bar shows the number of distinct colors used in the displayed Active or Saved image, excluding borders and CRT effects.
+
+**Real TS2068 playback:** **Download .TAP** saves `ula-pal` (palette and mode metadata), `ula-df1`, and, where needed, `ula-df2`. These are named data files inside one image TAP, with no executable code by default. Check **Include ULAVIEW program in .TAP** to prepend an autostart single-image viewer with a direct-loading machine-code block (no slow BASIC hex installer). Leave it unchecked for slideshows. Prebuilt readers are [ulaview.tap](viewer/ulaview.tap) and [ulavpico.tap](viewer/ulavpico.tap); see [format and loading instructions](viewer/README.md). [ulademo.tap](viewer/ulademo.tap) is a data-only demo; [ulademo-viewer.tap](viewer/ulademo-viewer.tap) includes the viewer. **Download ula-pal.bin** also saves the 80-byte palette/mode file on its own. No separate host palette file is required when using the image TAP.
+
+This checkout was updated from published/upstream commit `f8d5b9873fb046ed177a2ba6a46900133bee68a1` on November 18, 2026. The published HTML matched that commit exactly. The existing attributes-first TAP option is retained.
+
+ULA+/PicoVideo conversions default to a black border. The border selector under the export controls can opt into a palette color from the output border picker. Black reserves a black PAPER entry before conversion (also for custom palettes); hi-res shares its PAPER and border color. Preview, binary palette, TAP and profiles use the same choice.
+
+The viewer also reads earlier standard Timex ECM image TAPs (`ecm-atr` and `ecm-pix`) unchanged. Use [ecmview.tap](viewer/ecmview.tap) for one image, or prefix legacy entries with `ecm:` in the looping slideshow's DATA list to mix native ECM and ULA+ pictures. See the [viewer instructions](viewer/README.md).
+
+[RAMVIEW](viewer/ramview/README.md) is a separate TS-Pico SRAM slideshow: preload the images once, then play from banked RAM, with direct wipes restricted to matching modes, palettes and attribute maps. A two-frame demo is included for testing those transitions.
+
+The converter now supports ULA+ standard 8×8, Timex ULA+ ECM 8×1, ULA+ 512×192 hi-res with a custom global pair, and PicoVideo mode 7 (512×192 with 8×8 attributes), with or without ULA+. PicoVideo mode 3 provides four custom colors per pixel at 256×192. Native standard, ECM and hi-res modes remain available. PicoVideo's mode 5 is a character/font display, and is not included in these bitmap outputs.
+
+ULA+ has 64 palette registers selected from 256 `GGGRRRBB` colors. Red and green have eight levels including black. Blue has four levels: the two bits expand to three as `00 → 000`, `01 → 011`, `10 → 101`, `11 → 111`. This follows the [official ULA+ specification](https://zxdesign.itch.io/ulaplus). The 64 registers form four banks of 16. Each attribute block selects one bank, one of its eight INK entries, and one of its eight PAPER entries. FLASH and BRIGHT select the bank; they no longer flash or brighten the image. ECM changes the block to 8×1; it still allows only two colors per strip, and the palette is shared across the picture.
+
+Select **Automatic custom palette** to fit a palette to the image. **2-bit grayscale** uses the four hardware neutral shades (RGB 0, 109, 182, 255). **Green** and **Red** shading each offer eight levels including black; **Blue** offers four. These presets map source luminance into the chosen channel. Quad color mode can use four colors total, so it selects four from the eight-level red/green ramps. These are palette presets, not the deprecated ULA+ grayscale-register extension.
+
+The selected registers appear as swatches. **Download palette JSON** saves the exact hardware bytes for reuse. To supply a fixed palette, select **Custom palette registers (JSON)** and paste an array of exactly 64 integers, each 0–255, in register order. Quad color requires four integers. ULA+ hi-res uses register 0 for INK and register 15 for PAPER. Profiles save the preset and custom JSON. The existing palette strip controls which candidate colors automatic selection may use.
+
+| Output | Binary layout | Bytes |
+|---|---|---:|
+| ULA+ standard | 6912-byte screen + 64 palette bytes | 6976 |
+| ULA+ ECM | 6144-byte DF1 bitmap + 6144-byte DF2 attributes + 64 palette bytes | 12352 |
+| ULA+ hi-res | 6144-byte DF1 + 6144-byte DF2 + 64 palette bytes | 12352 |
+| PicoVideo mode 7 | 6912-byte DF1 + 6912-byte DF2 | 13824 |
+| PicoVideo mode 7 + ULA+ | Mode 7 data + 64 palette bytes | 13888 |
+| PicoVideo quad color (`.pv3`) | 6144-byte DF1 + 6144-byte DF2 + four GRB table bytes | 12292 |
+
+These binary layouts are explicitly defined here; ECM, mode 7 and `.pv3` palette trailers are converter formats rather than universal emulator file standards. For ULA+ standard, the 6976-byte layout is the conventional screen plus palette. A loader must split the data and program the palette registers; loading the complete file directly as SCREEN$ is insufficient.
+
+**TAP loading:** ULA+/PicoVideo image TAPs load `ula-pal` at `$A000` (80 bytes), `ula-df1` at `$A050`, and `ula-df2` immediately after DF1. The viewer validates the metadata, loads and checks the screen data, copies it to the hardware display files, and programs the palette/video registers. No per-image `video-init` code is generated. For a standalone TAP, the optional bundled BASIC viewer autostarts at line 10. Separate readers remain reusable across images. The attributes-first option continues to apply to ordinary non-ULA Timex ECM exports; ULA+ images use the palette-first data-file order. The [ula-pal v2 specification](viewer/README.md#ula-pal-file-format-version-2) defines all fields.
+
+Mode 3 uses the firmware's linear layout: for each eight-pixel group, DF1 holds four two-bit pixels MSB first, and DF2 holds the next four. Mode 7 alternates DF1/DF2 eight-pixel groups horizontally and keeps a separate 768-byte attribute area after each bitmap. Implementation references: [PicoVideo display code](https://github.com/timex-sinclair-projects/PicoVideo/blob/main/firmware/coreV/displayProc80.c), [register decoding](https://github.com/timex-sinclair-projects/PicoVideo/blob/main/firmware/video_decode.h), and [mode documentation](https://github.com/timex-sinclair-projects/PicoVideo/blob/main/docs/features.md). Older firmware may differ, particularly in how register 65 selects video modes.
+
+Validation: `node tests/video-modes.cjs` with a current Node.js checks DAC values, palette validation, every pixel of six exported hardware layouts, bank selection, and shading constraints. For browser integration, run `python tests/make-browser-test.py`, serve the repository, and open `tests/browser-harness.html`; the generated page appends pass/fail results for conversions and exports. It requires WebGL2 just like the app. Jon has confirmed SD slideshow playback and the fast CODE-loader RAMVIEW on a real TS2068 with PicoVideo/TSPico. This does not establish hardware coverage of every exported mode, transition or BREAK/error path.
 
 ## Running Locally
 
